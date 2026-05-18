@@ -15,7 +15,8 @@ All pipelines in this repository expect a dataset with the following three colum
 | Column | Type | Description |
 |---|---|---|
 | `trace_id` | `string` | Unique identifier for the trace |
-| `full_trace` | `string` | The complete agent execution trace (tool calls, observations, reasoning steps) |
+| `full_trace` | `list` | The complete agent execution trace (tool calls, observations, reasoning steps) |
+| `tools` | `list` | The list of openai formatted tool definition and schemas |
 | `final_answer` | `string` | The final answer produced by the agent at the end of the trace |
 
 ---
