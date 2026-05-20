@@ -45,7 +45,7 @@ Grow your initial trace dataset using automated data generation pipelines.
 
 Blend in open-source general-purpose datasets to prevent the model from losing broad reasoning and language capabilities during fine-tuning.
 
-- Curated selection of open-source datasets covering general instruction-following and reasoning ([Nemotron dataset](https://huggingface.co/datasets/nvidia/Nemotron-Agentic-v1))
+- Curated selection of open-source datasets covering general instruction-following and reasoning ([Nemotron dataset](https://huggingface.co/datasets/nvidia/Nemotron-Agentic-v1), [Dataset Library](https://github.com/mlabonne/llm-datasets))
 - Configurable mixing ratio between domain-specific traces and general data
 - Ensures fine-tuned models retain knowledge outside the agent tool-calling context
 
