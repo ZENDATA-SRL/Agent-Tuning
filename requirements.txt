@@ -63,3 +63,31 @@ wrapt==1.17.3
 xxhash==3.7.0
 zipp==3.23.1
 zstandard==0.25.0
+
+# ── Training (SFT via Unsloth + QLoRA) ────────────────────────────────────
+# Pins kept loose because Unsloth itself imposes a precise (and frequently
+# updated) compatibility matrix on transformers/trl/peft/accelerate. Letting
+# pip resolve within Unsloth's constraints avoids conflicts when bumping.
+#
+# Minimum versions are dictated by Gemma-4 support:
+#   - transformers>=5.5.2  → Gemma-4 added in 5.5.0, 5.5.2 fixes use_cache=False
+#                            path which Unsloth's training loop relies on.
+#   - unsloth>=2026.4.2    → first day-0 release with Gemma-4 (E2B/E4B/26B/31B)
+#                            and the gradient-accumulation / use_cache fixes.
+unsloth>=2026.5.6
+unsloth_zoo
+transformers>=5.5.0
+trl
+peft
+accelerate
+bitsandbytes
+datasets
+sentencepiece
+xformers
+# Experiment tracking — used by train/wandb_setup.py when --wandb (or any
+# WANDB_* env var) is set. Pin loose: wandb is generally backwards
+# compatible across minor versions and HF/TRL track its API changes.
+wandb
+# torch/triton are CUDA-specific; let Unsloth's installer select the right
+# wheel for the local CUDA toolkit (see https://docs.unsloth.ai for the
+# platform-specific install command).
