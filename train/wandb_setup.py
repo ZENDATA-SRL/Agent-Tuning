@@ -284,8 +284,8 @@ class SampleLogCallback:
         self.num_samples = min(num_samples, len(raw_texts))
         self.generate_samples = generate_samples
         self.max_new_tokens = max_new_tokens
-        self._wandb_table: "Any | None" = None
         self._wandb_columns = ["step", "sample_idx", "expected", "generated"]
+        self._pending_rows: list[list] = []
 
     # ------------------------------------------------------------------
     # TrainerCallback protocol (called by Hugging Face Trainer)
@@ -316,6 +316,7 @@ class SampleLogCallback:
             self._log_to_wandb(step, idx, expected.strip(), generated or "")
 
         print("=" * 70 + "\n")
+        self._flush_wandb_table(step)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -378,42 +379,31 @@ class SampleLogCallback:
         if wandb.run is None:
             return
 
-        if self._wandb_table is None:
-            self._wandb_table = wandb.Table(columns=self._wandb_columns)
-
-        self._wandb_table.add_data(step, idx, expected, generated)
-        wandb.log({"samples/expected_vs_generated": self._wandb_table}, step=step)
+        # Accumulate rows for this step in a plain list; the table is
+        # assembled and logged once per on_log call (see on_log) rather
+        # than kept as a growing instance attribute.  A persistent
+        # wandb.Table that receives add_data() every step causes wandb to
+        # hold a cumulative copy in memory for diffing, which grows
+        # without bound and steadily increases RAM (and VRAM).
+        if not hasattr(self, "_pending_rows"):
+            self._pending_rows: list[list] = []
+        self._pending_rows.append([step, idx, expected, generated])
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    def _split_prompt_expected(self, full_text: str) -> tuple[str, str]:
-        """Return (prompt_prefix, expected_completion) by splitting at the
-        last occurrence of the response marker in *full_text*."""
-        marker = self.adapter.response_part  # e.g. "<|turn>model\n"
-        last_pos = full_text.rfind(marker)
-        if last_pos == -1:
-            # Fallback: treat the whole string as the prompt, empty expected
-            return full_text, ""
-        split_pos = last_pos + len(marker)
-        return full_text[:split_pos], full_text[split_pos:]
-
-    def _log_to_wandb(
-        self, step: int, idx: int, expected: str, generated: str
-    ) -> None:
+    def _flush_wandb_table(self, step: int) -> None:
+        """Log all pending rows as a *fresh* wandb.Table and clear the buffer."""
         try:
             import wandb  # type: ignore
         except ImportError:
             return
-        if wandb.run is None:
+        if wandb.run is None or not getattr(self, "_pending_rows", None):
             return
-
-        if self._wandb_table is None:
-            self._wandb_table = wandb.Table(columns=self._wandb_columns)
-
-        self._wandb_table.add_data(step, idx, expected, generated)
-        wandb.log({"samples/expected_vs_generated": self._wandb_table}, step=step)
+        table = wandb.Table(columns=self._wandb_columns, data=self._pending_rows)
+        wandb.log({"samples/expected_vs_generated": table}, step=step)
+        self._pending_rows = []
 
 
 def make_sample_log_callback(
