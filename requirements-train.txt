@@ -1,0 +1,53 @@
+# ── Training environment (SFT via Unsloth + QLoRA) ────────────────────────────
+#
+# Minimal requirements to run  python -m train  (fine-tuning).
+# Does NOT include serving (vLLM) or export (llmcompressor) packages.
+#
+# IMPORTANT — two-step install required:
+#
+#   unsloth metadata incorrectly declares transformers<=5.5.0, but the code
+#   runs correctly on 5.5.2 (needed for Gemma4 support).  pip's resolver
+#   refuses to install both at once, so transformers must be force-upgraded
+#   AFTER the first install, bypassing the stale metadata check.
+#
+# Setup:
+#   python -m venv .venv-train
+#   source .venv-train/bin/activate
+#   # Install torch first via the Unsloth platform-specific command:
+#   #   https://docs.unsloth.ai  (selects the right CUDA wheel)
+#
+#   # Step 1 — install everything; unsloth will pull transformers==5.5.0
+#   pip install -r requirements-train.txt
+#
+#   # Step 2 — force-upgrade transformers, skipping the broken metadata check
+#   pip install --no-deps transformers==5.5.2
+#
+# Run:
+#   python -m train --config config.json
+# ──────────────────────────────────────────────────────────────────────────────
+
+# LoRA fine-tuning core
+unsloth>=2026.5.6
+unsloth_zoo
+
+# transformers is intentionally omitted here — unsloth will resolve it to
+# 5.5.0 (the highest it allows per metadata).  Run Step 2 above to upgrade
+# to 5.5.2 which fixes the Gemma4 save_pretrained / use_cache=False paths.
+
+trl
+peft
+accelerate
+bitsandbytes
+datasets
+sentencepiece
+xformers
+
+# Experiment tracking (optional — only used when report_to="wandb" or any
+# wandb_* field is set in SFTConfig).
+wandb
+
+# Runtime helpers
+python-dotenv
+
+# torch / CUDA wheels must be installed separately via the Unsloth installer:
+#   https://docs.unsloth.ai  (platform-specific CUDA wheel selection)

@@ -1,9 +1,28 @@
 from __future__ import annotations
 
+import os
 import time
 
 from benchmark.config import InferenceProfile
 from benchmark.inference.base import GenerationResult, InferenceClient, ToolCall
+
+
+def _build_langfuse_handler(session_id: str | None = None):
+    """Return a Langfuse CallbackHandler if credentials are available, else None.
+
+    Langfuse 4.x uses langfuse.langchain.CallbackHandler and reads credentials
+    from env vars: LANGFUSE_SECRET_KEY, LANGFUSE_PUBLIC_KEY, LANGFUSE_HOST.
+    """
+    if not (
+        os.getenv("LANGFUSE_SECRET_KEY")
+        and os.getenv("LANGFUSE_PUBLIC_KEY")
+    ):
+        return None
+    try:
+        from langfuse.langchain import CallbackHandler  # type: ignore
+        return CallbackHandler()
+    except ImportError:
+        return None
 
 
 def _lc_provider(profile: InferenceProfile) -> str:
@@ -40,6 +59,10 @@ def _build_lc_model(profile: InferenceProfile):
 
         if profile.api_key:
             kwargs["api_key"] = profile.api_key
+        elif profile.backend == "vllm":
+            # vLLM doesn't validate API keys but langchain_openai requires
+            # some value to be present. Use a placeholder.
+            kwargs["api_key"] = "EMPTY"
         if profile.base_url:
             kwargs["base_url"] = profile.base_url
 
@@ -115,11 +138,18 @@ class LangChainClient(InferenceClient):
     TTFT is approximated by measuring the first streamed chunk when the
     model supports streaming (stream() method); otherwise it equals total
     latency (non-streaming models like some Bedrock models).
+
+    If LANGFUSE_SECRET_KEY and LANGFUSE_PUBLIC_KEY are set in the environment,
+    every generation is automatically traced to Langfuse via the LangChain
+    callback handler.
     """
 
-    def __init__(self, profile: InferenceProfile) -> None:
+    def __init__(self, profile: InferenceProfile, session_id: str | None = None) -> None:
         self._model = _build_lc_model(profile)
         self._profile = profile
+        self._langfuse_handler = _build_langfuse_handler(session_id=session_id)
+        if self._langfuse_handler:
+            print(f"  [langfuse] tracing enabled → {os.getenv('LANGFUSE_BASE_URL', 'https://cloud.langfuse.com')}")
 
     def generate(
         self,
@@ -131,13 +161,15 @@ class LangChainClient(InferenceClient):
             # bind_tools accepts OpenAI-style function-calling dicts directly
             model = model.bind_tools(tools)
 
+        callbacks = [self._langfuse_handler] if self._langfuse_handler else []
+
         # --- Streaming path for TTFT measurement ---
         first_chunk_time: float | None = None
         start = time.perf_counter()
 
         try:
             chunks = []
-            for chunk in model.stream(messages):
+            for chunk in model.stream(messages, config={"callbacks": callbacks}):
                 if first_chunk_time is None:
                     first_chunk_time = time.perf_counter()
                 chunks.append(chunk)
@@ -159,7 +191,7 @@ class LangChainClient(InferenceClient):
         except Exception:
             # Fall back to invoke() if streaming fails (e.g. unsupported backend)
             start = time.perf_counter()
-            final = model.invoke(messages)
+            final = model.invoke(messages, config={"callbacks": callbacks})
             end = time.perf_counter()
             ttft_ms = (end - start) * 1000
             total_ms = ttft_ms

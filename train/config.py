@@ -60,7 +60,8 @@ class SFTConfig:
     mixed_precision: str = "bf16"
     # Recompute activations during the backward pass instead of storing them.
     # Trades ~20% speed for a large VRAM reduction — essential at seq_len ≥ 4096.
-    gradient_checkpointing: bool = True
+    # Use "unsloth" for Unsloth's optimised patched implementation (recommended).
+    gradient_checkpointing: str | bool = "unsloth"
 
     # ── Loss masking ──────────────────────────────────────────────────────
     # When True (default), the loss is computed ONLY on tool-call tokens inside

@@ -1,0 +1,28 @@
+# ── Export environment ────────────────────────────────────────────────────────
+#
+# Minimal requirements to run scripts/export_to_vllm.py.
+# Merges the LoRA adapter into a BNB NF4 4-bit model for vLLM serving.
+#
+# NOTE: llm-compressor and AutoAWQ are both incompatible with Gemma4:
+#   - AutoAWQ: deprecated, does not support gemma4 model type
+#   - llm-compressor: requires transformers<=4.57.6, Gemma4 needs >=5.5.x
+#   BNB 4-bit (this pipeline) is the only working path at the time of writing.
+#
+# Setup:
+#   python -m venv .export-venv
+#   source .export-venv/bin/activate
+#   pip install -r requirements-export.txt
+#   pip install --no-deps transformers==5.5.2   # override unsloth's stale pin
+#
+# Run:
+#   python scripts/export_to_vllm.py \
+#       --adapter outputs/sft-gemma4-e2b-real-v1 \
+#       --output  outputs/sft-gemma4-e2b-bnb4
+# ──────────────────────────────────────────────────────────────────────────────
+
+# LoRA merge (4-bit BNB NF4 — no dequantisation)
+unsloth>=2026.5.6
+unsloth_zoo
+
+# transformers is omitted — unsloth resolves it to 5.5.0.
+# Run  pip install --no-deps transformers==5.5.2  after this file to upgrade.

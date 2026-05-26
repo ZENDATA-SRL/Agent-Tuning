@@ -2,7 +2,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Benchmark: Ollama llama3.2:3b + Azure Judge (smoke)",
+            "name": "Benchmark: Ollama Gemma4:E2B + Azure Judge (smoke)",
             "type": "debugpy",
             "request": "launch",
             "module": "benchmark",
@@ -12,7 +12,7 @@
             "args": [
                 "--dataset",  "data/traces-2026-05-18.jsonl",
                 "--backend",  "ollama",
-                "--model",    "llama3.2:3b",
+                "--model",    "gemma4:e2b",
                 "--base-url", "http://localhost:11434",
                 "--temperature", "0.0",
                 "--max-tokens",  "1024",
@@ -25,7 +25,7 @@
                 "--judge-api-version","${env:AZURE_OPENAI_API_VERSION}",
                 "--judge-temperature","0.0",
                 "--judge-max-tokens", "512",
-                "--output",   "results/debug_ollama_llama3.1_8b_smoke_judged.json"
+                "--output",   "results/debug_gemma4_e2b_smoke_judged.json"
             ]
         },
         {

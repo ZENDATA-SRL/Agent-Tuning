@@ -105,9 +105,13 @@ def _parse_args() -> argparse.Namespace:
         help="Mixed precision mode. bf16 recommended for Ampere+ GPUs (3090/4090/A100).",
     )
     p.add_argument(
-        "--no-gradient-checkpointing",
-        action="store_true",
-        help="Disable gradient checkpointing (faster but uses more VRAM).",
+        "--gradient-checkpointing",
+        default="unsloth",
+        help=(
+            'Gradient checkpointing mode. "unsloth" (default) uses Unsloth\'s '
+            'optimised implementation; "true" / "false" enable/disable standard '
+            "HF checkpointing."
+        ),
     )
 
     # Loss masking
@@ -167,6 +171,19 @@ def _parse_args() -> argparse.Namespace:
     )
 
     return p.parse_args()
+
+
+def _parse_gc(value: str) -> "str | bool":
+    """Convert the --gradient-checkpointing CLI string to the right type.
+
+    "unsloth" is passed through as-is; "true"/"false" become booleans so
+    that TRL's TrainingArguments accepts them without complaint.
+    """
+    if value.lower() == "true":
+        return True
+    if value.lower() == "false":
+        return False
+    return value
 
 
 def main() -> None:
@@ -238,7 +255,7 @@ def main() -> None:
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         mixed_precision=args.mixed_precision,
-        gradient_checkpointing=not args.no_gradient_checkpointing,
+        gradient_checkpointing=_parse_gc(args.gradient_checkpointing),
         loss_on_tool_calls_only=not args.no_tool_calls_only,
         loss_include_final_response=args.loss_include_final_response,
         log_generate_samples=args.log_generate_samples,

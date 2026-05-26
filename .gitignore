@@ -224,3 +224,6 @@ data/
 **/*.jsonl
 **/*.json
 outputs/
+
+.export-venv/
+.serving-venv/

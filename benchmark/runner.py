@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
@@ -84,11 +85,17 @@ def run_benchmark(
     if max_traces:
         traces = traces[:max_traces]
 
+    # Unique session ID groups all Langfuse traces for this benchmark run
+    session_id = f"benchmark-{profile.label().replace('/', '_')}-{int(time.time())}"
+
     # Build inference clients
-    client: InferenceClient = build_client(profile)
+    client: InferenceClient = build_client(profile, session_id=session_id)
     judge_client: InferenceClient | None = None
     if use_judge:
-        judge_client = build_client(judge_profile if judge_profile else profile)
+        judge_client = build_client(
+            judge_profile if judge_profile else profile,
+            session_id=session_id,
+        )
 
     # tools=None means "read from each record"; tools=[] means "no tools"
     global_tools: list[dict] | None = tools
