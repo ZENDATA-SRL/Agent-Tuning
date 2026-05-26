@@ -2,6 +2,26 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Train: Qwen3-8B SFT",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/train_qwen3_sft.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "Export: Qwen3 LoRA → GGUF",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/export_lora_to_gguf.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
             "name": "Benchmark: Ollama Gemma4:E2B + Azure Judge (smoke)",
             "type": "debugpy",
             "request": "launch",

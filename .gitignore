@@ -227,3 +227,6 @@ outputs/
 
 .export-venv/
 .serving-venv/
+.venv_my_train/
+unsloth_compiled_cache/
+wandb/
