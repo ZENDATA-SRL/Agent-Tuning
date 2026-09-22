@@ -4,16 +4,22 @@ from langfuse import get_client
 from langfuse.api.core.request_options import RequestOptions
 from tqdm import tqdm
 
-load_dotenv()
+load_dotenv(".env")
 
 # After download data from langfuse traces launch this script to add also system prompt to the dataset
 langfuse = get_client()
+
+observations = langfuse.api.observations.get_many()
+
+
+
+
 traces = langfuse.api.trace.list(limit=1)
 langfuse.api.trace.get(traces.data[0].id)
 langfuse.api.observations.get_many(trace_id=traces.data[0].id)
 export_name = "export-05-18"
 output_data = []
-with open(f'data/{export_name}.jsonl', 'r') as file:
+with open(f'examples/{export_name}.jsonl', 'r') as file:
     for line in tqdm(file):
         data = json.loads(line)
         if not data["output"]:

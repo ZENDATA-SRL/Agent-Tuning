@@ -5,6 +5,7 @@
             "name": "Train: Qwen3-8B SFT",
             "type": "debugpy",
             "request": "launch",
+            "python": "${workspaceFolder}/.venv/bin/python",
             "program": "${workspaceFolder}/scripts/train_qwen3_sft.py",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",
@@ -49,9 +50,59 @@
             ]
         },
         {
+            "name": "Benchmark: vLLM qwen-umore",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "module": "benchmark",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--dataset", "data/umore_july_dataset/test_only_tool_call.jsonl",
+                "--backend", "vllm",
+                "--model", "qwen-umore",
+                "--base-url", "http://localhost:8000/v1",
+            ]
+        },
+        {
+            "name": "Benchmark: vLLM Qwen3-8B-no-lora",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "module": "benchmark",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--dataset", "data/umore_july_dataset/test_only_tool_call.jsonl",
+                "--backend", "vllm",
+                "--model", "unsloth/Qwen3-8B-unsloth-bnb-4bit",
+                "--base-url", "http://localhost:8000/v1",
+            ]
+        },
+        {
+            "name": "Benchmark: bedrock Sonnet 4.6 - umore (20 traces)",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "module": "benchmark",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--dataset", "data/umore_july_dataset/test_only_tool_call.jsonl",
+                "--backend", "bedrock",
+                "--model", "eu.anthropic.claude-sonnet-4-6",
+                "--region", "eu-west-1",
+                "--max-traces", "20"
+            ]
+        },
+        {
             "name": "Python Debugger: Current File",
             "type": "debugpy",
             "request": "launch",
+            "python": "${workspaceFolder}/.venv/bin/python",
             "program": "${file}",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",

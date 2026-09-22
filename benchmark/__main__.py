@@ -11,9 +11,14 @@ Usage examples:
 
   # vLLM (OpenAI-compatible local endpoint)
   python -m benchmark \\
-    --dataset data/traces-2026-05-18.jsonl \\
-    --backend vllm --model meta-llama/Llama-3-8b-instruct \\
-    --base-url http://localhost:8000/v1
+    --dataset data/umore_july_dataset/test_only_tool_call.jsonl \\
+    --backend vllm \\
+    --model unsloth/Qwen3-8B-unsloth-bnb-4bit \\
+    --base-url http://localhost:8000/v1 \\
+    --max-traces 5
+
+python -m benchmark --dataset data/umore_july_dataset/test_only_tool_call.jsonl --backend vllm --model unsloth/Qwen3-8B-unsloth-bnb-4bit --base-url http://localhost:8000/v1 --max-traces 5
+
 
   # Ollama (local, default http://localhost:11434)
   python -m benchmark \\

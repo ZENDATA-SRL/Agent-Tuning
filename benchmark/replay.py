@@ -10,6 +10,7 @@ class TurnResult:
     """Outcome of a single evaluated AI turn during replay."""
 
     turn_index: int
+    prompt_messages: list[dict]
     reference_text: str
     reference_tool_calls: list[ToolCall]
     generated: GenerationResult
@@ -27,6 +28,23 @@ class TraceReplayResult:
     total_turns_reference: int = 0
     total_turns_generated: int = 0
     error: str | None = None
+
+
+def _trace_messages(trace: dict) -> list[dict]:
+    """Return the conversation from either supported dataset schema."""
+    messages = trace.get("messages")
+    if isinstance(messages, list):
+        return messages
+    full_trace = trace.get("full_trace")
+    return full_trace if isinstance(full_trace, list) else []
+
+
+def _last_assistant_content(messages: list[dict]) -> str:
+    """Return the content of the last assistant message in a conversation."""
+    for msg in reversed(messages):
+        if _is_ai_role(msg.get("role", "").lower()) or msg.get("type", "").lower() == "ai":
+            return msg.get("content", "") or ""
+    return ""
 
 
 def _extract_reference_tool_calls(msg: dict) -> list[ToolCall]:
@@ -146,9 +164,11 @@ class ReplayEngine:
         self._tools = tools or []
 
     def replay(self, trace: dict) -> TraceReplayResult:
-        trace_id = trace.get("trace_id", "")
-        full_trace: list[dict] = trace.get("full_trace", [])
-        reference_final_answer: str = trace.get("final_answer", "")
+        trace_id = trace.get("trace_id", trace.get("id", ""))
+        full_trace = _trace_messages(trace)
+        reference_final_answer: str = trace.get(
+            "final_answer", _last_assistant_content(full_trace)
+        )
 
         result = TraceReplayResult(
             trace_id=trace_id,
@@ -197,6 +217,7 @@ class ReplayEngine:
                         ref_tool_calls = _extract_reference_tool_calls(msg)
                         result.turns.append(TurnResult(
                             turn_index=turn_index,
+                            prompt_messages=list(history),
                             reference_text=msg.get("content", "") or "",
                             reference_tool_calls=ref_tool_calls,
                             generated=generated,

@@ -16,7 +16,7 @@ from benchmark.metrics.answer import AnswerMetrics, score_answer
 from benchmark.metrics.compliance import ComplianceMetrics, score_compliance
 from benchmark.metrics.latency import LatencyMetrics, score_latency
 from benchmark.metrics.tool_calls import ToolCallMetrics, score_tool_calls
-from benchmark.replay import ReplayEngine, TraceReplayResult
+from benchmark.replay import ReplayEngine, TraceReplayResult, _trace_messages
 from benchmark.report import build_report, save_report
 
 
@@ -49,6 +49,44 @@ def _extract_system_prompt(full_trace: list[dict]) -> str:
     return ""
 
 
+def _extract_reference_final_answer(trace: dict, messages: list[dict]) -> str:
+    """Read the reference answer from either the legacy or current schema."""
+    if "final_answer" in trace:
+        return trace.get("final_answer", "") or ""
+    for message in reversed(messages):
+        if message.get("role", "").lower() in ("ai", "assistant"):
+            return message.get("content", "") or ""
+    return ""
+
+
+def _print_replay(trace_index: int, total_traces: int, replay_result: TraceReplayResult) -> None:
+    """Print prompts and model outputs for an interactive benchmark run."""
+    print(f"\n{'=' * 80}")
+    print(f"TRACE {trace_index + 1}/{total_traces}: {replay_result.trace_id}")
+    if replay_result.error:
+        print(f"REPLAY ERROR: {replay_result.error}")
+
+    for turn in replay_result.turns:
+        print(f"\n--- generated turn {turn.turn_index}"
+              f"{' (final answer)' if turn.is_final else ' (tool call)'} ---")
+        print("PROMPT:")
+        print(json.dumps(turn.prompt_messages, ensure_ascii=False, indent=2))
+        print("RESULT:")
+        print(json.dumps({
+            "text": turn.generated.text,
+            "tool_calls": [
+                {"name": call.name, "args": call.args, "id": call.call_id}
+                for call in turn.generated.tool_calls
+            ],
+            "input_tokens": turn.generated.input_tokens,
+            "output_tokens": turn.generated.output_tokens,
+            "latency_ms": turn.generated.total_latency_ms,
+        }, ensure_ascii=False, indent=2))
+
+    if not replay_result.turns and not replay_result.error:
+        print("No generated turns.")
+
+
 def run_benchmark(
     dataset_path: str | Path,
     profile: InferenceProfile,
@@ -57,6 +95,7 @@ def run_benchmark(
     judge_profile: InferenceProfile | None = None,
     tools: list[dict] | None = None,
     max_traces: int | None = None,
+    show_prompts: bool = False,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> dict:
     """
@@ -104,14 +143,37 @@ def run_benchmark(
 
     records: list[TraceRecord] = []
 
+    # filter only for traces that has tool calls or tool response
+    filtered_traces = []
+    for trace in traces:
+        messages = trace.get("messages", [])
+        has_tool_call = False
+        has_tool_response = False
+        for message in messages:
+            if message.get("role", "").lower() == "tool":
+                has_tool_response = True
+                break
+            if message.get("role", "").lower() == "assistant":
+                tool_calls = message.get("tool_calls", [])
+                if len(tool_calls) > 0:
+                    has_tool_call = True
+                    break
+        
+        if has_tool_call or has_tool_response:
+            filtered_traces.append(trace)
+
+    print(f"Filtered {len(filtered_traces)} traces out of {len(traces)}")
+
+    traces = filtered_traces
+
     for i, trace in enumerate(tqdm(traces, desc=f"Benchmarking {profile.label()}", file=sys.stdout)):
         if progress_callback:
             progress_callback(i, len(traces))
 
-        trace_id = trace.get("trace_id", f"trace_{i}")
-        full_trace: list[dict] = trace.get("full_trace", [])
+        trace_id = trace.get("trace_id", trace.get("id", f"trace_{i}"))
+        full_trace = _trace_messages(trace)
         system_prompt = _extract_system_prompt(full_trace)
-        reference_final = trace.get("final_answer", "")
+        reference_final = _extract_reference_final_answer(trace, full_trace)
        
         # Resolve tools: explicit argument > per-record field > empty
         trace_tools: list[dict] = (
@@ -124,6 +186,8 @@ def run_benchmark(
 
         # Replay
         replay_result: TraceReplayResult = replay_engine.replay(trace)
+        
+        _print_replay(i, len(traces), replay_result)
 
         # Tool call metrics
         tc_metrics = score_tool_calls(replay_result)

@@ -8,7 +8,7 @@ _lock = threading.Lock()
 _model = None
 _tokenizer = None
 _loaded_id: str | None = None
-_max_seq_length = 4096
+_max_seq_length = 16384
 
 
 def _load(model_name: str, loaded_id: str):

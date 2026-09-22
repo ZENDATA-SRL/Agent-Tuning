@@ -37,4 +37,5 @@ def render_chat(
         tools=tools if tools else None,
         tokenize=False,
         add_generation_prompt=add_generation_prompt,
+        enable_thinking=False
     )

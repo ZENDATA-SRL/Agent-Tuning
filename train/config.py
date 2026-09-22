@@ -14,18 +14,21 @@ class SFTConfig:
     # I/O
     dataset_path: str = "examples/traces-2026-05-18.jsonl"
     output_dir: str = "outputs/sft-qwen3-8b-v1"
+    # Checkpoint da cui riprendere il fine-tuning. Lasciare None per una
+    # nuova esecuzione; il percorso deve puntare a una directory checkpoint.
+    resume_from_checkpoint: str | None = "outputs/sft-qwen3-8b-umore-overfit/checkpoint-120"
 
     # Model — Unsloth's pre-quantized Qwen3-8B 4-bit checkpoint.
     # Using a "*-unsloth-bnb-4bit" repo avoids downloading ~16 GB of fp16
     # weights and quantizing them at load time on every fresh machine.
     model_name: str = "unsloth/Qwen3-8B-unsloth-bnb-4bit"
-    max_seq_length: int = 4096
+    max_seq_length: int = 16384
     load_in_4bit: bool = True
 
     # LoRA / PEFT
     lora_r: int = 16
     lora_alpha: int = 32
-    lora_dropout: float = 0.0
+    lora_dropout: float = 0.05
 
     # Training hyperparameters
     learning_rate: float = 2e-4
@@ -36,10 +39,10 @@ class SFTConfig:
     weight_decay: float = 0.01
     lr_scheduler_type: str = "cosine"
     optim: str = "adamw_8bit"
-    max_grad_norm: float = 1.0
+    max_grad_norm: float = 0.3
     seed: int = 3407
     logging_steps: int = 5
-    save_steps: int = 50
+    save_steps: int = 40
     # bf16 for Ampere+ (3090/4090/A100). Use "fp16" on older GPUs.
     mixed_precision: str = "bf16"
     # Unsloth's optimised gradient checkpointing (recommended).

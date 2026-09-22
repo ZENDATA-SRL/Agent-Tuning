@@ -8,34 +8,316 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any, List, Tuple
+
+import torch  # type: ignore[import-not-found]
 
 from train.config import SFTConfig
 from train.data import format_dataset, load_jsonl
-from train.templates import QWEN3_INSTRUCTION_PART, QWEN3_RESPONSE_PART
+from train.templates import QWEN3_RESPONSE_PART, QWEN3_INSTRUCTION_PART
+
+def load_dataset(dataset_path: str) -> tuple[list[dict], list[dict], list[dict]]:
+    print(f"[sft] Loading TRAIN dataset: {dataset_path}/train_only_tool_call.jsonl")
+    traces_train = load_jsonl(dataset_path + "/train_only_tool_call.jsonl")
+    print(f"[sft] {len(traces_train)} train traces loaded")
+    print(f"[sft] Loading TEST dataset: {dataset_path}/test_only_tool_call.jsonl")
+    traces_test = load_jsonl(dataset_path + "/test_only_tool_call.jsonl")
+    print(f"[sft] {len(traces_test)} test traces loaded")
+    print(f"[sft] Loading EVAL dataset: {dataset_path}/eval_only_tool_call.jsonl")
+    traces_eval = load_jsonl(dataset_path + "/eval_only_tool_call.jsonl")
+    print(f"[sft] {len(traces_eval)} eval traces loaded")
+    return traces_train, traces_test, traces_eval
+
+IGNORE_INDEX = -100
+
+# Marker che non devono MAI finire tra i token in loss.
+_FORBIDDEN_IN_LOSS = (
+    "<tool_response>",
+    "<|im_start|>user",
+    "<|im_start|>system",
+)
 
 
-def _print_masking_check(trainer, tokenizer) -> None:
-    """Decode the first training example before/after loss masking.
+def _extract_labels(trainer, index: int) -> Tuple[List[int], List[int]]:
+    """Return (input_ids, labels) for one training example.
 
-    Catches the most common silent bug of agentic SFT: a misconfigured
-    masking that hides the assistant content. If the masked decode does
-    not contain the expected assistant content, abort early.
+    Labels are usually produced by the collator at batch time, not stored
+    in the dataset, so we run the sample through the collator to see what
+    the model will actually receive.
     """
-    sample = trainer.train_dataset[0]
+    sample = trainer.train_dataset[index]
 
-    print("\n" + "=" * 70)
-    print("[sft] First example — full decoded input:")
-    print("=" * 70)
-    print(tokenizer.decode(sample["input_ids"]))
+    if "labels" in sample:
+        ids = list(sample["input_ids"])
+        labels = list(sample["labels"])
+    else:
+        batch = trainer.data_collator([sample])
+        if "labels" not in batch:
+            raise RuntimeError(
+                "Il collator non produce 'labels': la loss verrebbe calcolata "
+                "su tutta la sequenza. Configura il masking prima di procedere."
+            )
+        ids = batch["input_ids"][0].tolist()
+        labels = batch["labels"][0].tolist()
 
-    pad_id = tokenizer.pad_token_id
-    masked = [pad_id if x == -100 else x for x in sample["labels"]]
-    pad_str = tokenizer.pad_token if tokenizer.pad_token else "<pad>"
-    print("\n" + "=" * 70)
-    print("[sft] First example — masked labels (only loss-bearing tokens):")
-    print("=" * 70)
-    print(tokenizer.decode(masked).replace(pad_str, " "))
-    print("=" * 70 + "\n")
+    if len(ids) != len(labels):
+        raise RuntimeError(
+            f"Disallineamento input_ids ({len(ids)}) / labels ({len(labels)})."
+        )
+    return ids, labels
+
+
+def _contiguous_segments(labels: List[int]) -> List[List[int]]:
+    """Group loss-bearing tokens into contiguous runs (one per assistant turn).
+
+    Rebuilding segments from the label positions avoids decoding through a
+    pad token, which would be ambiguous whenever pad_token == eos_token.
+    """
+    segments: List[List[int]] = []
+    current: List[int] = []
+    previous = None
+
+    for position, token in enumerate(labels):
+        if token == IGNORE_INDEX:
+            continue
+        if previous is not None and position != previous + 1:
+            segments.append(current)
+            current = []
+        current.append(token)
+        previous = position
+
+    if current:
+        segments.append(current)
+    return segments
+
+
+def assert_masking_ok(
+    trainer,
+    tokenizer,
+    num_examples: int = 5,
+    min_ratio: float = 0.00,
+    max_ratio: float = 0.90,
+    verbose: bool = True,
+) -> None:
+    """Validate the loss mask on the first examples; raise if it is wrong.
+
+    Checks, in order of severity:
+      1. at least one token carries loss;
+      2. the share of loss-bearing tokens is plausible;
+      3. no user/system/tool text leaked into the loss (the failure that
+         teaches the model to hallucinate tool results);
+      4. every assistant turn ends on <|im_end|>, so the model learns to stop.
+    """
+    total_examples = len(trainer.train_dataset)
+    checked = min(num_examples, total_examples)
+    saw_tool_call = False
+
+    for index in range(checked):
+        ids, labels = _extract_labels(trainer, index)
+        segments = _contiguous_segments(labels)
+
+        if not segments:
+            raise RuntimeError(
+                f"[esempio {index}] nessun token in loss: maschera troppo stretta."
+            )
+
+        kept = sum(len(segment) for segment in segments)
+        ratio = kept / len(ids)
+        if not min_ratio < ratio < max_ratio:
+            raise RuntimeError(
+                f"[esempio {index}] {ratio:.1%} dei token in loss "
+                f"(atteso tra {min_ratio:.0%} e {max_ratio:.0%}): maschera sospetta."
+            )
+
+        texts = [tokenizer.decode(segment) for segment in segments]
+        joined = "\n".join(texts)
+
+        for marker in _FORBIDDEN_IN_LOSS:
+            if marker in joined:
+                raise RuntimeError(
+                    f"[esempio {index}] '{marker}' finisce tra i token in loss: "
+                    "il modello imparerebbe a generare input che deve solo leggere."
+                )
+
+        for turn_index, text in enumerate(texts):
+            if not text.rstrip().endswith("<|im_end|>"):
+                raise RuntimeError(
+                    f"[esempio {index}] il turno {turn_index} non termina con "
+                    "<|im_end|>: il modello non imparerebbe a chiudere il turno."
+                )
+
+        if "<tool_call>" in joined:
+            saw_tool_call = True
+
+        if verbose:
+            print("\n" + "=" * 70)
+            print(
+                f"[sft] esempio {index} — {len(segments)} turni assistant, "
+                f"{kept}/{len(ids)} token in loss ({ratio:.1%})"
+            )
+            print("=" * 70)
+            for turn_index, text in enumerate(texts):
+                print(f"--- turno {turn_index} ---")
+                print(text)
+
+    if not saw_tool_call:
+        print(
+            f"\n[sft] ATTENZIONE: nessuna <tool_call> tra i token in loss nei primi "
+            f"{checked} esempi. Verifica la composizione del dataset."
+        )
+
+    print(f"\n[sft] masking validato su {checked}/{total_examples} esempi.\n")
+
+
+def custom_masking(trainer: Any, tokenizer: Any) -> Any:
+    """Mask every token except the contents of assistant turns.
+
+    The dataset contains already-rendered Qwen3 ChatML text.  Applying the
+    mask after the trainer's collator has tokenized the batch makes the
+    behavior independent of tokenizer boundaries (a marker may be split over
+    multiple tokens) and also masks ``tool`` messages.
+
+    The assistant role marker itself is ignored; the closing ``<|im_end|>``
+    token is kept so the model learns when to stop generating.
+    """
+    start_ids = tokenizer.encode(
+        QWEN3_RESPONSE_PART,
+        add_special_tokens=False,
+    )
+    end_ids = tokenizer.encode("<|im_end|>", add_special_tokens=False)
+    if not start_ids or not end_ids:
+        raise ValueError("Impossibile tokenizzare i marker dei turni assistant.")
+
+    original_collator = trainer.data_collator
+
+    def collate_with_custom_masking(features: list[dict]) -> dict:
+        batch = original_collator(features)
+        input_ids = batch["input_ids"]
+        labels = batch.get("labels")
+        if labels is None:
+            labels = input_ids.clone()
+
+        masked_labels = torch.full_like(labels, IGNORE_INDEX)
+        for row in range(input_ids.shape[0]):
+            position = 0
+            while position <= input_ids.shape[1] - len(start_ids):
+                marker_end = position + len(start_ids)
+                if input_ids[row, position:marker_end].tolist() != start_ids:
+                    position += 1
+                    continue
+
+                content_start = marker_end
+                end = content_start
+                while end <= input_ids.shape[1] - len(end_ids):
+                    if input_ids[row, end : end + len(end_ids)].tolist() == end_ids:
+                        content_end = end + len(end_ids)
+                        masked_labels[row, content_start:content_end] = labels[
+                            row, content_start:content_end
+                        ]
+                        position = content_end
+                        break
+                    end += 1
+                else:
+                    raise RuntimeError(
+                        "Trovato un marker assistant senza <|im_end|> "
+                        "nella sequenza tokenizzata."
+                    )
+            # Padding and every non-assistant message remain IGNORE_INDEX.
+
+        batch["labels"] = masked_labels
+        return batch
+
+    trainer.data_collator = collate_with_custom_masking
+    return trainer
+
+
+class GenerationCallback:
+    """Sample a real response from the in-training model after each eval.
+
+    Uses the same model instance already loaded for SFT (no second load).
+    SFT itself is teacher-forcing and never generates; this is the only way
+    to inspect what the live weights would actually answer.
+    """
+
+    def __init__(
+        self,
+        model: Any,
+        tokenizer: Any,
+        eval_dataset: Any,
+        max_new_tokens: int = 512,
+    ):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.eval_dataset = eval_dataset
+        self.max_new_tokens = max_new_tokens
+
+    def __getattr__(self, name: str):
+        """Make unused Trainer callback events no-ops."""
+        if name.startswith("on_"):
+            return lambda *args, **kwargs: args[2] if len(args) > 2 else None
+        raise AttributeError(name)
+
+    @staticmethod
+    def _unwrap(model: Any) -> Any:
+        # Accelerate / DDP wrappers still point at the same GPU weights.
+        while hasattr(model, "module"):
+            model = model.module
+        return model
+
+    def _print_generation(self, state):
+        if len(self.eval_dataset) == 0:
+            return
+
+        model = self._unwrap(self.model)
+        text = self.eval_dataset[0]["text"]
+        assistant_marker = "<|im_start|>assistant"
+        assistant_start = text.rfind(assistant_marker)
+        prompt = text[:assistant_start] if assistant_start >= 0 else text
+        # Qwen3: enable_thinking=False is implemented by pre-closing an empty
+        # think block. Bare "<|im_start|>assistant\n" leaves thinking ON.
+        prompt = (
+            prompt.rstrip()
+            + "\n"
+            + assistant_marker
+            + "\n<think>\n\n</think>\n\n"
+        )
+
+        device = next(model.parameters()).device
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(device)
+        was_training = model.training
+        model.eval()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        try:
+            with torch.inference_mode():
+                generated = model.generate(
+                    **inputs,
+                    max_new_tokens=self.max_new_tokens,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    use_cache=True,
+                )
+        finally:
+            if was_training:
+                model.train()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        prompt_length = inputs["input_ids"].shape[1]
+        output = self.tokenizer.decode(
+            generated[0, prompt_length:],
+            skip_special_tokens=False,
+        ).strip()
+        print(
+            f"\n[sft] step {state.global_step} - live model generation "
+            f"(same weights as training):\n{output}\n",
+            flush=True,
+        )
+
+    def on_evaluate(self, args, state, control, **kwargs):
+        # Only run after eval: logging_steps can be 1 and generate() would OOM
+        # if called every training step while grads/optimizer still occupy VRAM.
+        self._print_generation(state)
+        return control
 
 
 def run_sft(config: SFTConfig) -> None:
@@ -43,8 +325,15 @@ def run_sft(config: SFTConfig) -> None:
     # Reduce CUDA allocator fragmentation when VRAM is nearly full.
     os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
     # Pop any malformed WANDB_* values so they can't propagate through
-    # subprocesses or unexpected callbacks.
-    for _k in ("WANDB_TAGS", "WANDB_PROJECT", "WANDB_NAME", "WANDB_ENTITY"):
+    # subprocesses or unexpected callbacks. Empty WANDB_MODE is especially
+    # bad: wandb Settings requires one of online/offline/shared/disabled/…
+    for _k in (
+        "WANDB_TAGS",
+        "WANDB_PROJECT",
+        "WANDB_NAME",
+        "WANDB_ENTITY",
+        "WANDB_MODE",
+    ):
         if os.environ.get(_k, "").strip() == "":
             os.environ.pop(_k, None)
 
@@ -78,12 +367,24 @@ def run_sft(config: SFTConfig) -> None:
         max_seq_length=config.max_seq_length,
     )
 
-    print(f"[sft] Loading dataset: {config.dataset_path}")
-    records = load_jsonl(config.dataset_path)
-    print(f"[sft] {len(records)} records loaded")
+    # Generation settings used whenever the model generates during training.
+    model.generation_config.do_sample = True
+    model.generation_config.temperature = 0.7
+    model.generation_config.top_p = 0.8
+    model.generation_config.top_k = 20
+    model.generation_config.min_p = 0.0
 
-    print("[sft] Rendering dataset with Qwen3 chat template")
-    train_dataset = format_dataset(records, tokenizer)
+    train_dataset, test_dataset, eval_dataset = load_dataset(config.dataset_path)
+
+    print("[sft] Rendering dataset with chat template")
+    train_dataset = format_dataset(train_dataset, tokenizer)
+    test_dataset = format_dataset(test_dataset, tokenizer)
+    eval_dataset = format_dataset(eval_dataset, tokenizer)
+
+    # reduce to only two examples
+    #train_dataset = train_dataset.select(range(min(32, len(train_dataset))))
+    #eval_dataset = eval_dataset.select(range(min(32, len(eval_dataset))))
+    #test_dataset = test_dataset.select(range(min(32, len(test_dataset))))
 
     output_dir = str(Path(config.output_dir))
 
@@ -91,11 +392,12 @@ def run_sft(config: SFTConfig) -> None:
         model=model,
         tokenizer=tokenizer,
         train_dataset=train_dataset,
-        eval_dataset=None,
+        eval_dataset=eval_dataset,
         args=TRLSFTConfig(
             dataset_text_field="text",
             max_seq_length=config.max_seq_length,
             per_device_train_batch_size=config.per_device_train_batch_size,
+            per_device_eval_batch_size=config.per_device_train_batch_size,
             gradient_accumulation_steps=config.gradient_accumulation_steps,
             gradient_checkpointing=bool(config.gradient_checkpointing),
             bf16=config.mixed_precision == "bf16",
@@ -103,9 +405,17 @@ def run_sft(config: SFTConfig) -> None:
             warmup_ratio=config.warmup_ratio,
             num_train_epochs=config.num_train_epochs,
             learning_rate=config.learning_rate,
-            logging_steps=config.logging_steps,
             save_steps=config.save_steps,
             save_strategy="steps",
+
+            eval_steps=40,
+            eval_strategy="steps",
+
+            metric_for_best_model="eval_loss",
+            greater_is_better=False,
+            load_best_model_at_end=True,
+
+
             optim=config.optim,
             weight_decay=config.weight_decay,
             lr_scheduler_type=config.lr_scheduler_type,
@@ -113,7 +423,9 @@ def run_sft(config: SFTConfig) -> None:
             seed=config.seed,
             output_dir=output_dir,
             report_to="wandb",
+            logging_steps=config.logging_steps,
         ),
+        #callbacks=[GenerationCallback(model, tokenizer, eval_dataset)],
     )
 
     print("[sft] Wiring loss masking (train_on_responses_only)")
@@ -121,14 +433,23 @@ def run_sft(config: SFTConfig) -> None:
         trainer,
         instruction_part=QWEN3_INSTRUCTION_PART,
         response_part=QWEN3_RESPONSE_PART,
+        last_response_only=True,
     )
+    # print("[sft] Wiring custom assistant-token masking")
+    # trainer = custom_masking(trainer, tokenizer)
 
-    _print_masking_check(trainer, tokenizer)
+    assert_masking_ok(trainer, tokenizer)
 
-    print("[sft] Starting training")
-    trainer.train()
+    if config.resume_from_checkpoint:
+        print(
+            f"[sft] Resuming training from checkpoint: "
+            f"{config.resume_from_checkpoint}"
+        )
+    else:
+        print("[sft] Starting training")
+    trainer.train(resume_from_checkpoint=config.resume_from_checkpoint)
 
-    print(f"[sft] Saving LoRA adapter to {output_dir}")
-    model.save_pretrained(output_dir)
-    tokenizer.save_pretrained(output_dir)
+    print(f"[sft] Saving best model LoRA adapter to {output_dir}")
+    model.save_pretrained(output_dir + "/best_eval_model")
+    tokenizer.save_pretrained(output_dir + "/best_eval_model")
     print("[sft] Done.")

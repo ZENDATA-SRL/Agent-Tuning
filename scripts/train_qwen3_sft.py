@@ -6,9 +6,10 @@ configuration in `.vscode/launch.json`, or just `python scripts/train_qwen3_sft.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
-
+import uuid
 # Make the repo root importable when this script is run directly
 # (so `from train import ...` resolves without installing the package).
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -19,9 +20,12 @@ from train import SFTConfig, run_sft  # noqa: E402
 
 
 def main() -> None:
+    from dotenv import load_dotenv
+    load_dotenv()
+    temp_id = str(uuid.uuid4())
     config = SFTConfig(
-        dataset_path="examples/traces-2026-05-18.jsonl",
-        output_dir="outputs/sft-qwen3-8b-v1",
+        dataset_path="data/umore_july_dataset",
+        output_dir=f"outputs/sft-qwen3-8b-umore-{temp_id}",
     )
     run_sft(config)
 

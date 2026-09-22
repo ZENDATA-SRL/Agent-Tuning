@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,39 @@ _ROLE_MAPPING = {
 
 def _normalize_role(role: str) -> str:
     return _ROLE_MAPPING.get(role.lower(), role.lower())
+
+
+def _assert_openai_message(msg: Any) -> None:
+    """Assert that a message already follows the OpenAI chat schema."""
+    assert isinstance(msg, dict), "message must be a dict"
+    role = msg.get("role")
+    assert role in {"system", "user", "assistant", "tool"}, (
+        f"invalid OpenAI message role: {role!r}"
+    )
+
+    content = msg.get("content", "")
+    assert content is None or isinstance(content, str), (
+        "OpenAI message content must be a string or None"
+    )
+
+    if role == "assistant" and msg.get("tool_calls") is not None:
+        tool_calls = msg["tool_calls"]
+        assert isinstance(tool_calls, list), "tool_calls must be a list"
+        for tool_call in tool_calls:
+            assert isinstance(tool_call, dict), "tool_call must be a dict"
+            assert tool_call.get("id"), "tool_call must have an id"
+            assert tool_call.get("type") == "function", (
+                "tool_call type must be 'function'"
+            )
+            function = tool_call.get("function")
+            assert isinstance(function, dict), "tool_call function must be a dict"
+            assert function.get("name"), "tool_call function must have a name"
+            assert isinstance(function.get("arguments"), str), (
+                "tool_call function arguments must be a JSON string"
+            )
+
+    if role == "tool":
+        assert msg.get("tool_call_id"), "tool message must have tool_call_id"
 
 
 def _build_openai_message(msg: dict) -> dict | None:
@@ -76,9 +110,10 @@ def _build_openai_message(msg: dict) -> dict | None:
 
 def trace_to_messages(record: dict) -> list[dict]:
     """Project a dataset record into a list of OpenAI-canonical messages."""
-    full_trace: list[dict] = record.get("full_trace", [])
+    raw_messages = record.get("messages", [])
     messages: list[dict] = []
-    for msg in full_trace:
+    for msg in raw_messages:
+        _assert_openai_message(msg)
         m = _build_openai_message(msg)
         if m is not None:
             messages.append(m)
