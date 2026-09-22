@@ -6,9 +6,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from backend.adapters import list_adapters
-from backend.agent import run_agent
-from backend.prompts import SYSTEM_PROMPT
+from app.backend.adapters import list_adapters
+from app.backend.agent import run_agent
+from app.backend.prompts import SYSTEM_PROMPT
 
 app = FastAPI(title="Agent-Tuning Playground")
 app.add_middleware(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 
-from backend.adapters import BASE_MODEL_ID, BASE_MODEL_NAME, resolve_adapter
+from app.backend.adapters import BASE_MODEL_ID, BASE_MODEL_NAME, resolve_adapter
 
 _lock = threading.Lock()
 _model = None

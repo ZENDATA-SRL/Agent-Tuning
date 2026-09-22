@@ -5,9 +5,9 @@ import re
 import uuid
 from typing import Any
 
-from backend.model import generate
-from backend.prompts import SYSTEM_PROMPT
-from backend.tools import TOOLS, run_tool
+from app.backend.model import generate
+from app.backend.prompts import SYSTEM_PROMPT
+from app.backend.tools import TOOLS, run_tool
 
 _TOOL_CALL_RE = re.compile(
     r"<tool_call>\s*(\{.*?\})\s*</tool_call>",
@@ -100,7 +100,7 @@ def run_agent(
                 entry["name"] = msg["name"]
         messages.append(entry)
 
-    from backend.model import ensure_loaded
+    from app.backend.model import ensure_loaded
 
     _, tokenizer = ensure_loaded(adapter_id)
     trace: list[dict] = []

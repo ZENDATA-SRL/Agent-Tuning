@@ -231,5 +231,5 @@ outputs/
 unsloth_compiled_cache/
 wandb/
 
-frontend/node_modules/
-frontend/dist/
+app/frontend/node_modules/
+app/frontend/dist/
