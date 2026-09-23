@@ -1,8 +1,11 @@
-"""Supervised fine-tuning loop for Qwen3-8B on agent traces.
+"""Supervised fine-tuning loop on agent traces.
 
-Minimal, single-purpose: load Qwen3 in 4-bit, attach LoRA adapters,
-render the JSONL traces with the tokenizer's chat template, mask the
-loss to assistant turns only, train, save the LoRA adapter.
+Minimal, single-purpose: load the model from `SFTConfig`, attach LoRA
+adapters, render the JSONL traces with the tokenizer's chat template,
+mask the loss to assistant turns only, train, save the LoRA adapter.
+
+Model-specific choices (checkpoint, LoRA targets, sampling, chat-template
+markers) come from the config, not from this module.
 """
 from __future__ import annotations
 
@@ -14,7 +17,6 @@ import torch  # type: ignore[import-not-found]
 
 from train.config import SFTConfig
 from train.data import format_dataset, load_jsonl
-from train.templates import QWEN3_RESPONSE_PART, QWEN3_INSTRUCTION_PART
 
 def load_dataset(dataset_path: str) -> tuple[list[dict], list[dict], list[dict]]:
     print(f"[sft] Loading TRAIN dataset: {dataset_path}/train_only_tool_call.jsonl")
@@ -29,13 +31,6 @@ def load_dataset(dataset_path: str) -> tuple[list[dict], list[dict], list[dict]]
     return traces_train, traces_test, traces_eval
 
 IGNORE_INDEX = -100
-
-# Marker che non devono MAI finire tra i token in loss.
-_FORBIDDEN_IN_LOSS = (
-    "<tool_response>",
-    "<|im_start|>user",
-    "<|im_start|>system",
-)
 
 
 def _extract_labels(trainer, index: int) -> Tuple[List[int], List[int]]:
@@ -94,6 +89,9 @@ def _contiguous_segments(labels: List[int]) -> List[List[int]]:
 def assert_masking_ok(
     trainer,
     tokenizer,
+    *,
+    forbidden_in_loss: tuple[str, ...],
+    turn_end_marker: str,
     num_examples: int = 5,
     min_ratio: float = 0.00,
     max_ratio: float = 0.90,
@@ -106,7 +104,8 @@ def assert_masking_ok(
       2. the share of loss-bearing tokens is plausible;
       3. no user/system/tool text leaked into the loss (the failure that
          teaches the model to hallucinate tool results);
-      4. every assistant turn ends on <|im_end|>, so the model learns to stop.
+      4. every assistant turn ends on the configured end marker, so the model
+         learns to stop.
     """
     total_examples = len(trainer.train_dataset)
     checked = min(num_examples, total_examples)
@@ -132,7 +131,7 @@ def assert_masking_ok(
         texts = [tokenizer.decode(segment) for segment in segments]
         joined = "\n".join(texts)
 
-        for marker in _FORBIDDEN_IN_LOSS:
+        for marker in forbidden_in_loss:
             if marker in joined:
                 raise RuntimeError(
                     f"[esempio {index}] '{marker}' finisce tra i token in loss: "
@@ -140,10 +139,10 @@ def assert_masking_ok(
                 )
 
         for turn_index, text in enumerate(texts):
-            if not text.rstrip().endswith("<|im_end|>"):
+            if not text.rstrip().endswith(turn_end_marker):
                 raise RuntimeError(
                     f"[esempio {index}] il turno {turn_index} non termina con "
-                    "<|im_end|>: il modello non imparerebbe a chiudere il turno."
+                    f"{turn_end_marker}: il modello non imparerebbe a chiudere il turno."
                 )
 
         if "<tool_call>" in joined:
@@ -169,22 +168,25 @@ def assert_masking_ok(
     print(f"\n[sft] masking validato su {checked}/{total_examples} esempi.\n")
 
 
-def custom_masking(trainer: Any, tokenizer: Any) -> Any:
+def custom_masking(
+    trainer: Any,
+    tokenizer: Any,
+    *,
+    response_part: str,
+    turn_end_marker: str,
+) -> Any:
     """Mask every token except the contents of assistant turns.
 
-    The dataset contains already-rendered Qwen3 ChatML text.  Applying the
+    The dataset contains already-rendered chat-template text.  Applying the
     mask after the trainer's collator has tokenized the batch makes the
     behavior independent of tokenizer boundaries (a marker may be split over
     multiple tokens) and also masks ``tool`` messages.
 
-    The assistant role marker itself is ignored; the closing ``<|im_end|>``
+    The assistant role marker itself is ignored; the closing end-marker
     token is kept so the model learns when to stop generating.
     """
-    start_ids = tokenizer.encode(
-        QWEN3_RESPONSE_PART,
-        add_special_tokens=False,
-    )
-    end_ids = tokenizer.encode("<|im_end|>", add_special_tokens=False)
+    start_ids = tokenizer.encode(response_part, add_special_tokens=False)
+    end_ids = tokenizer.encode(turn_end_marker, add_special_tokens=False)
     if not start_ids or not end_ids:
         raise ValueError("Impossibile tokenizzare i marker dei turni assistant.")
 
@@ -219,7 +221,7 @@ def custom_masking(trainer: Any, tokenizer: Any) -> Any:
                     end += 1
                 else:
                     raise RuntimeError(
-                        "Trovato un marker assistant senza <|im_end|> "
+                        f"Trovato un marker assistant senza {turn_end_marker} "
                         "nella sequenza tokenizzata."
                     )
             # Padding and every non-assistant message remain IGNORE_INDEX.
@@ -244,11 +246,16 @@ class GenerationCallback:
         model: Any,
         tokenizer: Any,
         eval_dataset: Any,
+        *,
+        response_part: str,
+        generation_prompt_suffix: str,
         max_new_tokens: int = 512,
     ):
         self.model = model
         self.tokenizer = tokenizer
         self.eval_dataset = eval_dataset
+        self.response_part = response_part
+        self.generation_prompt_suffix = generation_prompt_suffix
         self.max_new_tokens = max_new_tokens
 
     def __getattr__(self, name: str):
@@ -270,17 +277,9 @@ class GenerationCallback:
 
         model = self._unwrap(self.model)
         text = self.eval_dataset[0]["text"]
-        assistant_marker = "<|im_start|>assistant"
-        assistant_start = text.rfind(assistant_marker)
+        assistant_start = text.rfind(self.response_part)
         prompt = text[:assistant_start] if assistant_start >= 0 else text
-        # Qwen3: enable_thinking=False is implemented by pre-closing an empty
-        # think block. Bare "<|im_start|>assistant\n" leaves thinking ON.
-        prompt = (
-            prompt.rstrip()
-            + "\n"
-            + assistant_marker
-            + "\n<think>\n\n</think>\n\n"
-        )
+        prompt = prompt.rstrip() + "\n" + self.generation_prompt_suffix
 
         device = next(model.parameters()).device
         inputs = self.tokenizer(prompt, return_tensors="pt").to(device)
@@ -357,34 +356,31 @@ def run_sft(config: SFTConfig) -> None:
         r=config.lora_r,
         lora_alpha=config.lora_alpha,
         lora_dropout=config.lora_dropout,
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],
+        target_modules=config.lora_target_modules,
         bias="none",
         use_gradient_checkpointing=config.gradient_checkpointing,
         random_state=config.seed,
         max_seq_length=config.max_seq_length,
     )
 
-    # Generation settings used whenever the model generates during training.
-    model.generation_config.do_sample = True
-    model.generation_config.temperature = 0.7
-    model.generation_config.top_p = 0.8
-    model.generation_config.top_k = 20
-    model.generation_config.min_p = 0.0
+    model.generation_config.do_sample = config.generation_do_sample
+    model.generation_config.temperature = config.generation_temperature
+    model.generation_config.top_p = config.generation_top_p
+    model.generation_config.top_k = config.generation_top_k
+    model.generation_config.min_p = config.generation_min_p
 
     train_dataset, test_dataset, eval_dataset = load_dataset(config.dataset_path)
 
     print("[sft] Rendering dataset with chat template")
-    train_dataset = format_dataset(train_dataset, tokenizer)
-    test_dataset = format_dataset(test_dataset, tokenizer)
-    eval_dataset = format_dataset(eval_dataset, tokenizer)
-
-    # reduce to only two examples
-    #train_dataset = train_dataset.select(range(min(32, len(train_dataset))))
-    #eval_dataset = eval_dataset.select(range(min(32, len(eval_dataset))))
-    #test_dataset = test_dataset.select(range(min(32, len(test_dataset))))
+    train_dataset = format_dataset(
+        train_dataset, tokenizer, chat_template_kwargs=config.chat_template_kwargs
+    )
+    test_dataset = format_dataset(
+        test_dataset, tokenizer, chat_template_kwargs=config.chat_template_kwargs
+    )
+    eval_dataset = format_dataset(
+        eval_dataset, tokenizer, chat_template_kwargs=config.chat_template_kwargs
+    )
 
     output_dir = str(Path(config.output_dir))
 
@@ -408,7 +404,7 @@ def run_sft(config: SFTConfig) -> None:
             save_steps=config.save_steps,
             save_strategy="steps",
 
-            eval_steps=40,
+            eval_steps=config.eval_steps,
             eval_strategy="steps",
 
             metric_for_best_model="eval_loss",
@@ -425,20 +421,42 @@ def run_sft(config: SFTConfig) -> None:
             report_to="wandb",
             logging_steps=config.logging_steps,
         ),
-        #callbacks=[GenerationCallback(model, tokenizer, eval_dataset)],
+        #callbacks=[GenerationCallback(
+        #    model,
+        #    tokenizer,
+        #    eval_dataset,
+        #    response_part=config.response_part,
+        #    generation_prompt_suffix=config.generation_prompt_suffix,
+        #)],
     )
 
-    print("[sft] Wiring loss masking (train_on_responses_only)")
-    trainer = train_on_responses_only(
+    if config.loss_masking == "unsloth_responses_only":
+        print("[sft] Wiring loss masking (train_on_responses_only)")
+        trainer = train_on_responses_only(
+            trainer,
+            instruction_part=config.instruction_part,
+            response_part=config.response_part,
+            last_response_only=config.last_response_only,
+        )
+    elif config.loss_masking == "assistant_turns":
+        print("[sft] Wiring custom assistant-token masking")
+        trainer = custom_masking(
+            trainer,
+            tokenizer,
+            response_part=config.response_part,
+            turn_end_marker=config.turn_end_marker,
+        )
+    else:
+        raise ValueError(
+            f"loss_masking sconosciuto: {config.loss_masking!r}."
+        )
+
+    assert_masking_ok(
         trainer,
-        instruction_part=QWEN3_INSTRUCTION_PART,
-        response_part=QWEN3_RESPONSE_PART,
-        last_response_only=True,
+        tokenizer,
+        forbidden_in_loss=config.forbidden_in_loss,
+        turn_end_marker=config.turn_end_marker,
     )
-    # print("[sft] Wiring custom assistant-token masking")
-    # trainer = custom_masking(trainer, tokenizer)
-
-    assert_masking_ok(trainer, tokenizer)
 
     if config.resume_from_checkpoint:
         print(

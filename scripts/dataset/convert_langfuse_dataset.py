@@ -10,10 +10,10 @@ Output:
 import json
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-INPUT_PATH = ROOT / "test_dataset.json"
-OUTPUT_PATH = ROOT / "test_dataset_openai.json"
-TOOLS_PATH = ROOT / "examples" / "tools.json"
+ROOT = Path(__file__).resolve().parents[1].parents[0]
+INPUT_PATH = ROOT / "langfuse_dataset.json"
+OUTPUT_PATH = ROOT / "data" / "langfuse_dataset_openai.json"
+TOOLS_PATH = ROOT / "data" / "tools.json"
 
 
 def decode_json(value):
@@ -112,6 +112,7 @@ def convert_trace(trace, tools):
         messages.insert(0, {"role": "system", "content": system_prompt})
 
     return {
+        "trace_id": trace.get("trace_id", ""),
         "tools": tools,
         "messages": messages,
     }

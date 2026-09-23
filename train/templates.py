@@ -1,25 +1,13 @@
-"""Chat-template helper for Qwen3.
+"""Chat-template helper.
 
-Qwen3 ships with its own Jinja chat template in the tokenizer config
-(ChatML-style: `<|im_start|>role\\n...<|im_end|>`). It supports
-`tools=[...]` and `role:"tool"` natively, which is what we need to
-train on full agentic traces (system → user → assistant(tool_calls) →
-tool → assistant).
-
-Loss-masking markers used by Unsloth's `train_on_responses_only`:
-    instruction = "<|im_start|>user\\n"
-    response    = "<|im_start|>assistant\\n"
+Rendering goes through the tokenizer's bundled Jinja template, which is
+what supports `tools=[...]` and `role:"tool"` on the agent traces.
+Model-specific kwargs (`enable_thinking`, markers, …) come from the
+recipe's `ChatTemplateSpec` and are forwarded here unchanged.
 """
 from __future__ import annotations
 
-from typing import Any
-
-
-# Markers consumed by `train_on_responses_only` to split the loss between
-# the prompt prefix (masked, ignored by the loss) and the assistant turns
-# (kept, learned). They must appear verbatim in the rendered text.
-QWEN3_INSTRUCTION_PART: str = "<|im_start|>user\n"
-QWEN3_RESPONSE_PART: str = "<|im_start|>assistant\n"
+from typing import Any, Mapping
 
 
 def render_chat(
@@ -28,14 +16,13 @@ def render_chat(
     tools: list[dict] | None,
     *,
     add_generation_prompt: bool = False,
+    chat_template_kwargs: Mapping[str, Any] | None = None,
 ) -> str:
-    """Render a conversation into Qwen3's wire format using the tokenizer's
-    bundled chat template. Returns the rendered string.
-    """
+    """Render a conversation with the tokenizer's chat template."""
     return tokenizer.apply_chat_template(
         messages,
         tools=tools if tools else None,
         tokenize=False,
         add_generation_prompt=add_generation_prompt,
-        enable_thinking=False
+        **dict(chat_template_kwargs or {}),
     )

@@ -18,13 +18,13 @@ filters = [
         "type": "datetime",
         "column": "startTime",
         "operator": ">=",
-        "value": "2026-07-01",
+        "value": "2026-01-01",
     },
     {# end_time is before 2026-07-31
         "type": "datetime",
         "column": "endTime",
         "operator": "<=",
-        "value": "2026-07-31",
+        "value": "2026-09-22",
     }
     # {
     #     "type": "string",
@@ -117,5 +117,5 @@ complete_traces = [
     for trace_id, trace_observations in traces.items()
 ]
 
-with open("test_dataset.json", "w") as f:
+with open("langfuse_dataset.json", "w") as f:
     f.write(json.dumps(complete_traces, ensure_ascii=False, indent=2))

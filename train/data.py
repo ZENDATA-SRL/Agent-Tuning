@@ -1,10 +1,9 @@
-"""Dataset loading + chat-template rendering for Qwen3 SFT."""
+"""Dataset loading and chat-template rendering for agent traces."""
 from __future__ import annotations
 
 import json
-import random
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from datasets import Dataset
 
@@ -123,6 +122,8 @@ def trace_to_messages(record: dict) -> list[dict]:
 def format_dataset(
     records: list[dict],
     tokenizer: Any,
+    *,
+    chat_template_kwargs: Mapping[str, Any] | None = None,
 ) -> Dataset:
     """Render each record into a single training string (the "text" column)."""
     if not records:
@@ -137,6 +138,7 @@ def format_dataset(
             messages,
             tools=tools if tools else None,
             add_generation_prompt=False,
+            chat_template_kwargs=chat_template_kwargs,
         )
         texts.append(text)
 

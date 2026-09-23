@@ -1,0 +1,1 @@
+- Do not write long docstrings, max 2 lines.
