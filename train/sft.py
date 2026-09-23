@@ -61,6 +61,9 @@ def run_sft(config: SFTConfig) -> None:
 
     print(f"[sft] Loading train dataset: {config.train_dataset_path}")
     train_dataset = load_json_dataset(config.train_dataset_path)
+    if config.shuffle:
+        print(f"[sft] Shuffling train dataset (seed={config.seed})")
+        train_dataset = train_dataset.shuffle(seed=config.seed)
 
     test_dataset = None
     if config.test_dataset_path:

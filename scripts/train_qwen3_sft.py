@@ -29,6 +29,7 @@ def main() -> None:
         test_dataset_path="data/apigenmt5k/test.json",
         eval_dataset_path="data/apigenmt5k/eval.json",
         output_dir=f"outputs/sft-qwen3-8b-apigenmt5k-{temp_id}",
+        shuffle=True,
         # None per una nuova esecuzione. Il percorso deve puntare a una
         # directory checkpoint.
         # resume_from_checkpoint="outputs/sft-qwen3-8b-umore-overfit/checkpoint-120",

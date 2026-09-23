@@ -122,6 +122,7 @@ class ModelRecipe:
         test_dataset_path: str | None = None,
         eval_dataset_path: str | None = None,
         resume_from_checkpoint: str | None = None,
+        shuffle: bool = False,
         **overrides: Any,
     ) -> SFTConfig:
         """Build the flat config consumed by `run_sft`.
@@ -135,6 +136,7 @@ class ModelRecipe:
             eval_dataset_path=eval_dataset_path,
             output_dir=output_dir,
             resume_from_checkpoint=resume_from_checkpoint,
+            shuffle=shuffle,
             model_name=self.model_name,
             max_seq_length=self.max_seq_length,
             load_in_4bit=self.load_in_4bit,
@@ -236,6 +238,7 @@ class ModelRecipe:
         eval_dataset_path: str | None = None,
         dataset_path: str | None = None,
         resume_from_checkpoint: str | None = None,
+        shuffle: bool = False,
         **overrides: Any,
     ) -> SFTConfig | GRPOConfig:
         if method == "sft":
@@ -249,6 +252,7 @@ class ModelRecipe:
                 eval_dataset_path=eval_dataset_path,
                 output_dir=output_dir,
                 resume_from_checkpoint=resume_from_checkpoint,
+                shuffle=shuffle,
                 **overrides,
             )
         if method == "grpo":
@@ -285,6 +289,8 @@ class SFTConfig:
     eval_dataset_path: str | None
     output_dir: str
     resume_from_checkpoint: str | None
+    # Shuffle the train split before formatting / training.
+    shuffle: bool
 
     # Model
     model_name: str
