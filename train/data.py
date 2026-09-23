@@ -2,23 +2,16 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any, Mapping
 
-from datasets import Dataset
+from datasets import Dataset, load_dataset
 
 from train.templates import render_chat
 
 
-def load_jsonl(path: str | Path) -> list[dict]:
-    """Read a JSONL dataset into a list of dicts."""
-    records: list[dict] = []
-    with open(path, "r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    return records
+def load_json_dataset(path: str) -> Dataset:
+    """Load a local JSON array (or JSONL) file via HuggingFace `datasets`."""
+    return load_dataset("json", data_files=path, split="train")
 
 
 # Langchain-style traces use "human"/"ai", OpenAI uses "user"/"assistant".
@@ -120,14 +113,14 @@ def trace_to_messages(record: dict) -> list[dict]:
 
 
 def format_dataset(
-    records: list[dict],
+    records: Dataset | list[dict],
     tokenizer: Any,
     *,
     chat_template_kwargs: Mapping[str, Any] | None = None,
 ) -> Dataset:
     """Render each record into a single training string (the "text" column)."""
-    if not records:
-        raise ValueError("format_dataset received an empty record list.")
+    if len(records) == 0:
+        raise ValueError("format_dataset received an empty dataset.")
 
     texts: list[str] = []
     for rec in records:

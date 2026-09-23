@@ -25,11 +25,13 @@ def main() -> None:
     temp_id = str(uuid.uuid4())
     recipe = load_model("qwen3_8b_unsloth_bnb_4bit")
     config = recipe.sft(
-        dataset_path="data/umore_july_dataset",
-        output_dir=f"outputs/sft-qwen3-8b-umore-{temp_id}",
+        train_dataset_path="data/apigenmt5k/train.json",
+        test_dataset_path="data/apigenmt5k/test.json",
+        eval_dataset_path="data/apigenmt5k/eval.json",
+        output_dir=f"outputs/sft-qwen3-8b-apigenmt5k-{temp_id}",
         # None per una nuova esecuzione. Il percorso deve puntare a una
         # directory checkpoint.
-        resume_from_checkpoint="outputs/sft-qwen3-8b-umore-overfit/checkpoint-120",
+        # resume_from_checkpoint="outputs/sft-qwen3-8b-umore-overfit/checkpoint-120",
     )
     run_sft(config)
 

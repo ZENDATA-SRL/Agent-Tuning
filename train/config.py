@@ -2,8 +2,8 @@
 
 A recipe is the supported-model unit: checkpoint, LoRA targets, sampling
 and chat-template markers, plus one hyperparameter block per method
-(SFT, GRPO, …). Experiment-specific values (dataset, output directory,
-resume checkpoint) are passed when the method config is built.
+(SFT, GRPO, …). Experiment-specific values (dataset paths, output
+directory, resume checkpoint) are passed when the method config is built.
 
 Concrete recipes live in `train/configs/` and are loaded with
 `train.configs.load_model`.
@@ -117,8 +117,10 @@ class ModelRecipe:
     def sft(
         self,
         *,
-        dataset_path: str,
+        train_dataset_path: str,
         output_dir: str,
+        test_dataset_path: str | None = None,
+        eval_dataset_path: str | None = None,
         resume_from_checkpoint: str | None = None,
         **overrides: Any,
     ) -> SFTConfig:
@@ -128,7 +130,9 @@ class ModelRecipe:
         for a single run. Unknown names raise `TypeError`.
         """
         params: dict[str, Any] = dict(
-            dataset_path=dataset_path,
+            train_dataset_path=train_dataset_path,
+            test_dataset_path=test_dataset_path,
+            eval_dataset_path=eval_dataset_path,
             output_dir=output_dir,
             resume_from_checkpoint=resume_from_checkpoint,
             model_name=self.model_name,
@@ -226,19 +230,30 @@ class ModelRecipe:
         self,
         method: Literal["sft", "grpo"],
         *,
-        dataset_path: str,
         output_dir: str,
+        train_dataset_path: str | None = None,
+        test_dataset_path: str | None = None,
+        eval_dataset_path: str | None = None,
+        dataset_path: str | None = None,
         resume_from_checkpoint: str | None = None,
         **overrides: Any,
     ) -> SFTConfig | GRPOConfig:
         if method == "sft":
+            if train_dataset_path is None:
+                raise TypeError(
+                    "build(method='sft') richiede train_dataset_path."
+                )
             return self.sft(
-                dataset_path=dataset_path,
+                train_dataset_path=train_dataset_path,
+                test_dataset_path=test_dataset_path,
+                eval_dataset_path=eval_dataset_path,
                 output_dir=output_dir,
                 resume_from_checkpoint=resume_from_checkpoint,
                 **overrides,
             )
         if method == "grpo":
+            if dataset_path is None:
+                raise TypeError("build(method='grpo') richiede dataset_path.")
             return self.grpo(
                 dataset_path=dataset_path,
                 output_dir=output_dir,
@@ -265,7 +280,9 @@ class SFTConfig:
     """Resolved supervised fine-tuning run. Built by `ModelRecipe.sft`."""
 
     # I/O
-    dataset_path: str
+    train_dataset_path: str
+    test_dataset_path: str | None
+    eval_dataset_path: str | None
     output_dir: str
     resume_from_checkpoint: str | None
 
