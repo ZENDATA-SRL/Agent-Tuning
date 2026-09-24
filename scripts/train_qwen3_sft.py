@@ -1,13 +1,7 @@
-"""Launchable entrypoint for Qwen3-8B SFT training.
-
-Model, LoRA, sampling and chat-template defaults come from the recipe
-`qwen3_8b_unsloth_bnb_4bit`. This script only sets the run: dataset,
-output directory, resume checkpoint.
-"""
+"""Launchable entrypoint for Qwen3-8B SFT training."""
 from __future__ import annotations
 
 import sys
-import uuid
 from pathlib import Path
 
 # Make the repo root importable when this script is run directly
@@ -22,16 +16,17 @@ from train import load_model, run_sft  # noqa: E402
 def main() -> None:
     from dotenv import load_dotenv
     load_dotenv()
-    temp_id = str(uuid.uuid4())
     recipe = load_model("qwen3_8b_unsloth_bnb_4bit")
     config = recipe.sft(
-        train_dataset_path="data/apigenmt5k/train.json",
-        test_dataset_path="data/apigenmt5k/test.json",
-        eval_dataset_path="data/apigenmt5k/eval.json",
-        output_dir=f"outputs/sft-qwen3-8b-apigenmt5k-{temp_id}",
+        dataset_path="data/umore/umore_openai.json",
+        output_dir="outputs/sft-qwen3-8b-umore",
         shuffle=True,
-        # None per una nuova esecuzione. Il percorso deve puntare a una
-        # directory checkpoint.
+        dataset_fraction=0.50, # use only 50% of the dataset to speed up training
+        lora_dropout=0.05,
+
+        # Override default params of the model
+        # learning_rate=1e-4,
+        # report_to="none", # if you want to disable reporting to wandb
         # resume_from_checkpoint="outputs/sft-qwen3-8b-umore-overfit/checkpoint-120",
     )
     run_sft(config)

@@ -2,8 +2,16 @@
 from __future__ import annotations
 
 import inspect
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping
+
+
+def _resolve_run(output_dir: str, run_id: str | None) -> tuple[str, str]:
+    """Return ``(run_id, output_dir/run_id)`` with a generated id when omitted."""
+    rid = run_id or str(uuid.uuid4())
+    base = output_dir.rstrip("/")
+    return rid, f"{base}-{rid}"
 
 
 LossMasking = Literal["unsloth_responses_only", "assistant_turns"]
@@ -115,7 +123,7 @@ class ModelRecipe:
         shuffle: bool = False,
         max_traces: int | None = None,
         dataset_fraction: float = 1.0,
-        temp_id: str | None = None,
+        run_id: str | None = None,
         **overrides: Any,
     ) -> SFTConfig:
         """Build the flat config consumed by `run_sft`.
@@ -124,6 +132,7 @@ class ModelRecipe:
         for a single run. Names that are not fields of `SFTConfig` are
         stored in `trainer_kwargs` and forwarded to the trainer.
         """
+        run_id, output_dir = _resolve_run(output_dir, run_id)
         params: dict[str, Any] = dict(
             dataset_path=dataset_path,
             output_dir=output_dir,
@@ -131,7 +140,7 @@ class ModelRecipe:
             shuffle=shuffle,
             max_traces=max_traces,
             dataset_fraction=dataset_fraction,
-            temp_id=temp_id,
+            temp_id=run_id,
             model_name=self.model_name,
             max_seq_length=self.max_seq_length,
             load_in_4bit=self.load_in_4bit,
@@ -182,7 +191,7 @@ class ModelRecipe:
         max_traces: int | None = None,
         dataset_fraction: float = 1.0,
         reward_weights: list[float] | None = None,
-        temp_id: str | None = None,
+        run_id: str | None = None,
         **overrides: Any,
     ) -> GRPOConfig:
         """Build the flat config consumed by `run_grpo`.
@@ -193,6 +202,7 @@ class ModelRecipe:
         Names that are not fields of `GRPOConfig` are stored in
         `trainer_kwargs` and forwarded to the trainer.
         """
+        run_id, output_dir = _resolve_run(output_dir, run_id)
         params: dict[str, Any] = dict(
             dataset_path=dataset_path,
             output_dir=output_dir,
@@ -202,7 +212,7 @@ class ModelRecipe:
             max_traces=max_traces,
             dataset_fraction=dataset_fraction,
             reward_weights=reward_weights,
-            temp_id=temp_id,
+            temp_id=run_id,
             model_name=self.model_name,
             max_seq_length=self.max_seq_length,
             load_in_4bit=self.load_in_4bit,
@@ -265,7 +275,7 @@ class ModelRecipe:
                 shuffle=shuffle,
                 max_traces=max_traces,
                 dataset_fraction=dataset_fraction,
-                temp_id=temp_id,
+                run_id=temp_id,
                 **overrides,
             )
         if method == "grpo":
@@ -276,7 +286,7 @@ class ModelRecipe:
                 shuffle=shuffle,
                 max_traces=max_traces,
                 dataset_fraction=dataset_fraction,
-                temp_id=temp_id,
+                run_id=temp_id,
                 **overrides,
             )
         raise ValueError(
