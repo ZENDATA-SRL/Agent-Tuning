@@ -1,14 +1,4 @@
-"""Registry of supported model recipes.
-
-Drop a module under this package (optionally in a family subfolder) that
-exports `RECIPE: ModelRecipe`. It is discovered by id:
-
-    from train.configs import load_model
-
-    recipe = load_model("qwen3_8b_unsloth_bnb_4bit")
-    sft_config = recipe.sft(train_dataset_path="...", output_dir="...")
-    grpo_config = recipe.grpo(dataset_path="...", output_dir="...")
-"""
+"""Registry of supported model recipes."""
 from __future__ import annotations
 
 import importlib

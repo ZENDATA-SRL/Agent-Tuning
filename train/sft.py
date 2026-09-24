@@ -4,8 +4,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from train.config import SFTConfig
-from train.data import format_dataset, load_json_dataset
+# Unsloth must be imported before transformers/trl to install its patches.
+from unsloth import FastLanguageModel  # type: ignore
+from unsloth.chat_templates import train_on_responses_only  # type: ignore
+from trl import SFTConfig as TRLSFTConfig  # type: ignore
+from trl import SFTTrainer  # type: ignore
+
+from datasets import Dataset
+
+from train.config import SFTConfig, partition_trainer_kwargs
+from train.data import format_dataset, limit_traces, load_prepared_splits
 from train.utils import assert_masking_ok
 
 
@@ -25,12 +33,6 @@ def run_sft(config: SFTConfig) -> None:
     ):
         if os.environ.get(_k, "").strip() == "":
             os.environ.pop(_k, None)
-
-    # Unsloth must be imported before transformers/trl to install its patches.
-    from unsloth import FastLanguageModel  # type: ignore
-    from unsloth.chat_templates import train_on_responses_only  # type: ignore
-    from trl import SFTConfig as TRLSFTConfig  # type: ignore
-    from trl import SFTTrainer  # type: ignore
 
     print(f"[sft] Loading model: {config.model_name}")
     model, tokenizer = FastLanguageModel.from_pretrained(
@@ -59,41 +61,49 @@ def run_sft(config: SFTConfig) -> None:
     model.generation_config.top_k = config.generation_top_k
     model.generation_config.min_p = config.generation_min_p
 
-    print(f"[sft] Loading train dataset: {config.train_dataset_path}")
-    train_dataset = load_json_dataset(config.train_dataset_path)
+    print(f"[sft] Loading dataset: {config.dataset_path}")
+    if config.dataset_fraction < 1.0:
+        print(
+            f"[sft] Using {config.dataset_fraction:g} of records from file"
+        )
+    splits = load_prepared_splits(
+        config.dataset_path,
+        dataset_fraction=config.dataset_fraction,
+        temp_id=config.temp_id,
+    )
+    print(
+        "[sft] Split sizes: "
+        f"train={len(splits['train'])}, "
+        f"test={len(splits['test'])}, "
+        f"eval={len(splits['eval'])}"
+    )
+
+    train_dataset = Dataset.from_list(splits["train"])
     if config.shuffle:
         print(f"[sft] Shuffling train dataset (seed={config.seed})")
         train_dataset = train_dataset.shuffle(seed=config.seed)
+    if config.max_traces is not None:
+        before = len(train_dataset)
+        train_dataset = limit_traces(train_dataset, config.max_traces)
+        print(f"[sft] Train traces: {len(train_dataset)}/{before}")
 
-    test_dataset = None
-    if config.test_dataset_path:
-        print(f"[sft] Loading test dataset: {config.test_dataset_path}")
-        test_dataset = load_json_dataset(config.test_dataset_path)
-
-    eval_dataset = None
-    if config.eval_dataset_path:
-        print(f"[sft] Loading eval dataset: {config.eval_dataset_path}")
-        eval_dataset = load_json_dataset(config.eval_dataset_path)
+    eval_dataset = (
+        Dataset.from_list(splits["eval"]) if splits["eval"] else None
+    )
 
     print("[sft] Rendering dataset with chat template")
     train_dataset = format_dataset(
         train_dataset, tokenizer, chat_template_kwargs=config.chat_template_kwargs
     )
-    if test_dataset is not None:
-        test_dataset = format_dataset(
-            test_dataset, tokenizer, chat_template_kwargs=config.chat_template_kwargs
-        )
     if eval_dataset is not None:
         eval_dataset = format_dataset(
             eval_dataset, tokenizer, chat_template_kwargs=config.chat_template_kwargs
         )
 
-    splits = [f"train={len(train_dataset)}"]
-    if test_dataset is not None:
-        splits.append(f"test={len(test_dataset)}")
+    rendered = [f"train={len(train_dataset)}", f"test={len(splits['test'])}"]
     if eval_dataset is not None:
-        splits.append(f"eval={len(eval_dataset)}")
-    print(f"[sft] Dataset sizes: {', '.join(splits)}")
+        rendered.append(f"eval={len(eval_dataset)}")
+    print(f"[sft] Dataset sizes: {', '.join(rendered)}")
 
     output_dir = str(Path(config.output_dir))
     has_eval = eval_dataset is not None
@@ -102,7 +112,7 @@ def run_sft(config: SFTConfig) -> None:
         dataset_text_field="text",
         max_seq_length=config.max_seq_length,
         per_device_train_batch_size=config.per_device_train_batch_size,
-        per_device_eval_batch_size=config.per_device_train_batch_size,
+        per_device_eval_batch_size=1,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
         gradient_checkpointing=bool(config.gradient_checkpointing),
         bf16=config.mixed_precision == "bf16",
@@ -122,13 +132,35 @@ def run_sft(config: SFTConfig) -> None:
         output_dir=output_dir,
         report_to="wandb",
         logging_steps=config.logging_steps,
+        # TRL 1.13 defaults to chunked_nll, which replaces model.forward and
+        # skips Unsloth's fused cross-entropy. nll keeps that path.
+        # loss_type="nll",
+        # Unsloth treats a missing padding_free as "auto". This machine has no
+        # FlashAttention 2, and padding-free then concatenates the batch into
+        # one sequence whose attention matrix does not fit in 24 GB.
+        padding_free=False,
+        # TRL 1.13 sets use_reentrant=False on transformers 4.x, which skips
+        # Unsloth's gradient offload.
+        # gradient_checkpointing_kwargs={"use_reentrant": True},
     )
     if has_eval:
+        # Eval loss does not need logits. Leaving prediction_loss_only off
+        # materializes [batch, seq, vocab] and concatenates it on the 3090.
         trainer_args.update(
             eval_steps=config.eval_steps,
             metric_for_best_model="eval_loss",
             greater_is_better=False,
+            prediction_loss_only=True,
+            eval_do_concat_batches=False,
+            eval_accumulation_steps=1,
         )
+
+    config_kwargs, ctor_kwargs = partition_trainer_kwargs(
+        SFTTrainer, config.trainer_kwargs
+    )
+    trainer_args.update(config_kwargs)
+    if config.trainer_kwargs:
+        print(f"[sft] Trainer kwargs: {sorted(config.trainer_kwargs)}")
 
     trainer = SFTTrainer(
         model=model,
@@ -143,6 +175,7 @@ def run_sft(config: SFTConfig) -> None:
         #    response_part=config.response_part,
         #    generation_prompt_suffix=config.generation_prompt_suffix,
         #)],
+        **ctor_kwargs,
     )
 
     if config.loss_masking == "unsloth_responses_only":

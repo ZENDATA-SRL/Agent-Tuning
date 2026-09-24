@@ -1,15 +1,7 @@
-"""Schemas for a model recipe and the training methods it supports.
-
-A recipe is the supported-model unit: checkpoint, LoRA targets, sampling
-and chat-template markers, plus one hyperparameter block per method
-(SFT, GRPO, …). Experiment-specific values (dataset paths, output
-directory, resume checkpoint) are passed when the method config is built.
-
-Concrete recipes live in `train/configs/` and are loaded with
-`train.configs.load_model`.
-"""
+"""Schemas for a model recipe and the training methods it supports."""
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping
 
@@ -77,7 +69,7 @@ class SFTHyperparams:
 
 @dataclass(frozen=True)
 class GRPOHyperparams:
-    """Method block for GRPO. The trainer is not wired yet; the values are."""
+    """Method block for GRPO (online RL with group-relative advantages)."""
 
     learning_rate: float
     num_train_epochs: float
@@ -117,26 +109,29 @@ class ModelRecipe:
     def sft(
         self,
         *,
-        train_dataset_path: str,
+        dataset_path: str,
         output_dir: str,
-        test_dataset_path: str | None = None,
-        eval_dataset_path: str | None = None,
         resume_from_checkpoint: str | None = None,
         shuffle: bool = False,
+        max_traces: int | None = None,
+        dataset_fraction: float = 1.0,
+        temp_id: str | None = None,
         **overrides: Any,
     ) -> SFTConfig:
         """Build the flat config consumed by `run_sft`.
 
         `overrides` replace recipe defaults (learning rate, LoRA rank, …)
-        for a single run. Unknown names raise `TypeError`.
+        for a single run. Names that are not fields of `SFTConfig` are
+        stored in `trainer_kwargs` and forwarded to the trainer.
         """
         params: dict[str, Any] = dict(
-            train_dataset_path=train_dataset_path,
-            test_dataset_path=test_dataset_path,
-            eval_dataset_path=eval_dataset_path,
+            dataset_path=dataset_path,
             output_dir=output_dir,
             resume_from_checkpoint=resume_from_checkpoint,
             shuffle=shuffle,
+            max_traces=max_traces,
+            dataset_fraction=dataset_fraction,
+            temp_id=temp_id,
             model_name=self.model_name,
             max_seq_length=self.max_seq_length,
             load_in_4bit=self.load_in_4bit,
@@ -173,7 +168,7 @@ class ModelRecipe:
             forbidden_in_loss=self.chat.forbidden_in_loss,
             chat_template_kwargs=dict(self.chat.template_kwargs),
         )
-        _apply_overrides(params, overrides, label="SFT")
+        params["trainer_kwargs"] = _collect_trainer_kwargs(params, overrides)
         return SFTConfig(**params)
 
     def grpo(
@@ -182,13 +177,32 @@ class ModelRecipe:
         dataset_path: str,
         output_dir: str,
         resume_from_checkpoint: str | None = None,
+        lora_adapter_path: str | None = None,
+        shuffle: bool = False,
+        max_traces: int | None = None,
+        dataset_fraction: float = 1.0,
+        reward_weights: list[float] | None = None,
+        temp_id: str | None = None,
         **overrides: Any,
     ) -> GRPOConfig:
-        """Build the flat config a GRPO run will consume."""
+        """Build the flat config consumed by `run_grpo`.
+
+        `lora_adapter_path` points at a saved LoRA directory (e.g. an SFT
+        `best_eval_model`) to continue from. `None` attaches a fresh LoRA.
+        Reward callables are passed separately to `run_grpo`.
+        Names that are not fields of `GRPOConfig` are stored in
+        `trainer_kwargs` and forwarded to the trainer.
+        """
         params: dict[str, Any] = dict(
             dataset_path=dataset_path,
             output_dir=output_dir,
             resume_from_checkpoint=resume_from_checkpoint,
+            lora_adapter_path=lora_adapter_path,
+            shuffle=shuffle,
+            max_traces=max_traces,
+            dataset_fraction=dataset_fraction,
+            reward_weights=reward_weights,
+            temp_id=temp_id,
             model_name=self.model_name,
             max_seq_length=self.max_seq_length,
             load_in_4bit=self.load_in_4bit,
@@ -225,7 +239,7 @@ class ModelRecipe:
             forbidden_in_loss=self.chat.forbidden_in_loss,
             chat_template_kwargs=dict(self.chat.template_kwargs),
         )
-        _apply_overrides(params, overrides, label="GRPO")
+        params["trainer_kwargs"] = _collect_trainer_kwargs(params, overrides)
         return GRPOConfig(**params)
 
     def build(
@@ -233,35 +247,36 @@ class ModelRecipe:
         method: Literal["sft", "grpo"],
         *,
         output_dir: str,
-        train_dataset_path: str | None = None,
-        test_dataset_path: str | None = None,
-        eval_dataset_path: str | None = None,
         dataset_path: str | None = None,
         resume_from_checkpoint: str | None = None,
         shuffle: bool = False,
+        max_traces: int | None = None,
+        dataset_fraction: float = 1.0,
+        temp_id: str | None = None,
         **overrides: Any,
     ) -> SFTConfig | GRPOConfig:
+        if dataset_path is None:
+            raise TypeError(f"build(method={method!r}) richiede dataset_path.")
         if method == "sft":
-            if train_dataset_path is None:
-                raise TypeError(
-                    "build(method='sft') richiede train_dataset_path."
-                )
             return self.sft(
-                train_dataset_path=train_dataset_path,
-                test_dataset_path=test_dataset_path,
-                eval_dataset_path=eval_dataset_path,
+                dataset_path=dataset_path,
                 output_dir=output_dir,
                 resume_from_checkpoint=resume_from_checkpoint,
                 shuffle=shuffle,
+                max_traces=max_traces,
+                dataset_fraction=dataset_fraction,
+                temp_id=temp_id,
                 **overrides,
             )
         if method == "grpo":
-            if dataset_path is None:
-                raise TypeError("build(method='grpo') richiede dataset_path.")
             return self.grpo(
                 dataset_path=dataset_path,
                 output_dir=output_dir,
                 resume_from_checkpoint=resume_from_checkpoint,
+                shuffle=shuffle,
+                max_traces=max_traces,
+                dataset_fraction=dataset_fraction,
+                temp_id=temp_id,
                 **overrides,
             )
         raise ValueError(
@@ -269,28 +284,79 @@ class ModelRecipe:
         )
 
 
-def _apply_overrides(params: dict[str, Any], overrides: Mapping[str, Any], *, label: str) -> None:
-    unknown = sorted(set(overrides) - set(params))
-    if unknown:
-        known = ", ".join(sorted(params))
-        raise TypeError(
-            f"Override {label} sconosciuti: {unknown}. Campi validi: {known}."
-        )
-    params.update(overrides)
+# Chiavi già fissate dal loop di training. Non si inoltrano al trainer.
+_OWNED_TRAINER_KEYS = frozenset(
+    {
+        "self",
+        "model",
+        "args",
+        "train_dataset",
+        "eval_dataset",
+        "tokenizer",
+        "processing_class",
+        "reward_funcs",
+    }
+)
+
+
+def _collect_trainer_kwargs(
+    params: dict[str, Any], overrides: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Apply known overrides in place. Return names that are not config fields."""
+    extra: dict[str, Any] = {}
+    for key, value in overrides.items():
+        if key == "trainer_kwargs":
+            raise TypeError(
+                "trainer_kwargs è riservato: passa i parametri extra come kwargs."
+            )
+        if key in params:
+            params[key] = value
+        else:
+            extra[key] = value
+    return extra
+
+
+def partition_trainer_kwargs(
+    trainer_cls: type,
+    trainer_kwargs: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split extras into `(trl_config, trainer_ctor)`.
+
+    A name that matches the trainer constructor (and is not owned by the
+    training loop) goes to the constructor. Everything else is a TRL
+    config field and overrides the args built by the loop.
+    """
+    ctor_names = set(inspect.signature(trainer_cls.__init__).parameters)
+    config_kwargs: dict[str, Any] = {}
+    ctor_kwargs: dict[str, Any] = {}
+    for key, value in trainer_kwargs.items():
+        if key in _OWNED_TRAINER_KEYS:
+            raise TypeError(
+                f"{key!r} è gestito dal loop di training e non si può sovrascrivere."
+            )
+        if key in ctor_names:
+            ctor_kwargs[key] = value
+        else:
+            config_kwargs[key] = value
+    return config_kwargs, ctor_kwargs
 
 
 @dataclass
 class SFTConfig:
     """Resolved supervised fine-tuning run. Built by `ModelRecipe.sft`."""
 
-    # I/O
-    train_dataset_path: str
-    test_dataset_path: str | None
-    eval_dataset_path: str | None
+    # I/O. Train / test / eval are cut from this single file.
+    dataset_path: str
     output_dir: str
     resume_from_checkpoint: str | None
     # Shuffle the train split before formatting / training.
     shuffle: bool
+    # Cap the train split after shuffle. None loads every trace.
+    max_traces: int | None
+    # Fraction of records in dataset_path used before train/eval/test split (1.0 = all).
+    dataset_fraction: float
+    # Folder name, next to dataset_path, for the train/test/eval JSONL files.
+    temp_id: str | None
 
     # Model
     model_name: str
@@ -336,18 +402,31 @@ class SFTConfig:
     turn_end_marker: str
     forbidden_in_loss: tuple[str, ...]
     chat_template_kwargs: dict[str, Any]
+    # Kwargs assenti dallo schema: inoltrati a SFTTrainer / TRL SFTConfig.
+    trainer_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class GRPOConfig:
     """Resolved GRPO run. Built by `ModelRecipe.grpo`.
 
-    Holds everything the trainer will need. `run_grpo` is not implemented yet.
+    Reward callables are not stored here: pass them to `run_grpo`.
+    Optional `reward_weights` must match the number of reward functions.
     """
 
+    # Train / test / eval are cut from this single file.
     dataset_path: str
     output_dir: str
     resume_from_checkpoint: str | None
+    # Directory with adapter_config.json (e.g. SFT best_eval_model). None = fresh LoRA.
+    lora_adapter_path: str | None
+    shuffle: bool
+    # Cap the train split after shuffle. None loads every trace.
+    max_traces: int | None
+    dataset_fraction: float
+    # Folder name, next to dataset_path, for the train/test/eval JSONL files.
+    temp_id: str | None
+    reward_weights: list[float] | None
 
     model_name: str
     max_seq_length: int
@@ -388,3 +467,5 @@ class GRPOConfig:
     turn_end_marker: str
     forbidden_in_loss: tuple[str, ...]
     chat_template_kwargs: dict[str, Any]
+    # Kwargs assenti dallo schema: inoltrati a GRPOTrainer / TRL GRPOConfig.
+    trainer_kwargs: dict[str, Any] = field(default_factory=dict)

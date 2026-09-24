@@ -19,6 +19,11 @@ requires = ["uv_build>=0.12.15,<0.13.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
+benchmark = [
+    "dotenv>=0.9.9",
+    "langchain-ollama>=1.1.0",
+    "tqdm>=4.70.1",
+]
 unsloth-training = [
     "accelerate>=1.15.0",
     "bitsandbytes>=0.50.2",
@@ -33,7 +38,7 @@ unsloth-training = [
     "tqdm>=4.70.1",
     "transformers>=5.5.0",
     "trl==0.24.0",
-    "unsloth==2026.9.11",
-    "unsloth-zoo==2026.9.7",
+    "unsloth==2026.9.7",
+    "unsloth-zoo==2026.9.6",
     "wandb>=0.30.0",
 ]
