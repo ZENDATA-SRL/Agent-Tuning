@@ -1,0 +1,17 @@
+[project]
+name = "agent-tuning-benchmark"
+version = "0.1.0"
+description = "Benchmark clients for Agent-Tuning models"
+requires-python = ">=3.12"
+dependencies = [
+    "bitsandbytes>=0.50.2",
+    "langchain-aws>=1.3.0",
+    "langchain-ollama>=1.1.0",
+    "langchain-openai>=1.6.6",
+    "python-dotenv>=1.2.3",
+    "tqdm>=4.70.1",
+    "vllm==0.21.0",
+]
+
+[tool.uv]
+package = false

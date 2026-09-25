@@ -1,12 +1,26 @@
 {
     "version": "0.2.0",
     "configurations": [
+
         {
             "name": "Train: Qwen3-8B SFT",
             "type": "debugpy",
             "request": "launch",
-            "python": "${workspaceFolder}/.venv/bin/python",
+            "preLaunchTask": "uv sync unsloth-training",
+            "python": "${workspaceFolder}/train/.venv/bin/python",
             "program": "${workspaceFolder}/scripts/train_qwen3_sft.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
+            "name": "Train: Qwen3-8B GRPO",
+            "type": "debugpy",
+            "request": "launch",
+            "preLaunchTask": "uv sync unsloth-training",
+            "python": "${workspaceFolder}/train/.venv/bin/python",
+            "program": "${workspaceFolder}/scripts/train_qwen3_grpo.py",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",
             "cwd": "${workspaceFolder}",
@@ -16,6 +30,8 @@
             "name": "Export: Qwen3 LoRA → GGUF",
             "type": "debugpy",
             "request": "launch",
+            "preLaunchTask": "uv sync unsloth-training",
+            "python": "${workspaceFolder}/train/.venv/bin/python",
             "program": "${workspaceFolder}/scripts/export_lora_to_gguf.py",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",
@@ -23,53 +39,28 @@
             "justMyCode": false
         },
         {
-            "name": "Benchmark: Ollama Gemma4:E2B + Azure Judge (smoke)",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "benchmark",
-            "console": "integratedTerminal",
-            "envFile": "${workspaceFolder}/.env",
-            "cwd": "${workspaceFolder}",
-            "args": [
-                "--dataset",  "data/traces-2026-05-18.jsonl",
-                "--backend",  "ollama",
-                "--model",    "gemma4:e2b",
-                "--base-url", "http://localhost:11434",
-                "--temperature", "0.0",
-                "--max-tokens",  "1024",
-                "--max-traces",  "10",
-                "--use-judge",
-                "--judge-backend",    "azure",
-                "--judge-model",      "${env:AZURE_OPENAI_MODEL}",
-                "--judge-base-url",   "${env:AZURE_OPENAI_ENDPOINT}",
-                "--judge-deployment", "${env:AZURE_OPENAI_MODEL}",
-                "--judge-api-version","${env:AZURE_OPENAI_API_VERSION}",
-                "--judge-temperature","0.0",
-                "--judge-max-tokens", "512",
-                "--output",   "results/debug_gemma4_e2b_smoke_judged.json"
-            ]
-        },
-        {
             "name": "Benchmark: vLLM qwen-umore",
             "type": "debugpy",
             "request": "launch",
-            "python": "${workspaceFolder}/.venv/bin/python",
+            "preLaunchTask": "uv sync benchmark",
+            "python": "${workspaceFolder}/benchmark/.venv/bin/python",
             "module": "benchmark",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",
             "cwd": "${workspaceFolder}",
             "args": [
-                "--dataset", "data/umore_july_dataset/test_only_tool_call.jsonl",
+                "--dataset", "data/umore/d9682064-3916-4915-99bd-cfab2c8d624d/eval.jsonl",
                 "--backend", "vllm",
                 "--model", "qwen-umore",
-                "--base-url", "http://localhost:8000/v1",
+                "--base-url", "http://localhost:8000/v1"
             ]
         },
         {
             "name": "Benchmark: vLLM Qwen3-8B-no-lora",
             "type": "debugpy",
             "request": "launch",
-            "python": "${workspaceFolder}/.venv/bin/python",
+            "preLaunchTask": "uv sync benchmark",
+            "python": "${workspaceFolder}/benchmark/.venv/bin/python",
             "module": "benchmark",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",
@@ -78,14 +69,15 @@
                 "--dataset", "data/umore_july_dataset/test_only_tool_call.jsonl",
                 "--backend", "vllm",
                 "--model", "unsloth/Qwen3-8B-unsloth-bnb-4bit",
-                "--base-url", "http://localhost:8000/v1",
+                "--base-url", "http://localhost:8000/v1"
             ]
         },
         {
             "name": "Benchmark: bedrock Sonnet 4.6 - umore (20 traces)",
             "type": "debugpy",
             "request": "launch",
-            "python": "${workspaceFolder}/.venv/bin/python",
+            "preLaunchTask": "uv sync benchmark",
+            "python": "${workspaceFolder}/benchmark/.venv/bin/python",
             "module": "benchmark",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",
@@ -102,7 +94,7 @@
             "name": "Python Debugger: Current File",
             "type": "debugpy",
             "request": "launch",
-            "python": "${workspaceFolder}/.venv/bin/python",
+            "python": "${workspaceFolder}/train/.venv/bin/python",
             "program": "${file}",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",

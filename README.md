@@ -98,6 +98,30 @@ Your Trace Dataset
 
 ## Getting Started
 
+### Environments
+
+Training and benchmarking use separate `uv` projects because their PyTorch
+requirements are not compatible. The environments live in the same repository
+but have independent lockfiles:
+
+```bash
+# Training: creates/updates train/.venv
+uv sync --project train
+uv run --project train python scripts/train_qwen3_grpo.py
+
+# Benchmarking: creates/updates benchmark/.venv
+uv sync --project benchmark
+uv run --project benchmark python -m benchmark \
+  --dataset data/umore/d9682064-3916-4915-99bd-cfab2c8d624d/eval.jsonl \
+  --backend vllm \
+  --model qwen-umore \
+  --base-url http://localhost:8000/v1
+```
+
+The benchmark environment is a client only: vLLM should be running separately
+as a server. The VS Code launch configurations use the corresponding
+environment automatically.
+
 ### Supervised Fine-Tuning (SFT)
 
 The `train/` package implements an SFT pipeline on top of [Unsloth](https://docs.unsloth.ai) + QLoRA, with loss masking on the assistant tokens only. Defaults target `unsloth/gemma-4-E4B-it-unsloth-bnb-4bit` (a pre-quantized 4-bit checkpoint) on a single consumer GPU but the same CLI works for Qwen2.5, Llama-3.1, etc. — just override `--model-name`. The chat-template wire format and the loss-masking markers are picked automatically by `train/templates.py` based on the model id; add a new family by registering a `ChatTemplateAdapter` there.

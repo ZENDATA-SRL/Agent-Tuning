@@ -127,6 +127,19 @@ def main() -> None:
 
     api_key = args.api_key or os.getenv("OPENAI_API_KEY")
 
+    backend_extra: dict = {}
+    if args.backend == "ollama":
+        # ChatOllama exposes reasoning as a native boolean option.
+        backend_extra["reasoning"] = False
+    elif args.backend == "vllm":
+        # vLLM uses the OpenAI-compatible extra request body. This is
+        # understood by Qwen chat templates to disable thinking.
+        backend_extra["extra_body"] = {
+            "chat_template_kwargs": {
+                "enable_thinking": False,
+            },
+        }
+
     profile = InferenceProfile(
         backend=args.backend,
         model=args.model,
@@ -135,6 +148,7 @@ def main() -> None:
         region=args.region,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
+        extra=backend_extra,
     )
 
     # Build judge profile only when --use-judge is requested and a separate
