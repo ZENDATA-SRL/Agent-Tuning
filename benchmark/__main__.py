@@ -104,7 +104,7 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable LLM-as-judge scoring for answer quality and rule compliance.",
     )
-    p.add_argument("--judge-backend", default=None, choices=["openai", "vllm", "ollama", "bedrock", "azure"], help="Inference backend for the judge model.")
+    p.add_argument("--judge-backend", default=None, choices=["openai", "vllm", "ollama", "bedrock", "azure", "jev"], help="Inference backend for the judge model. jev uses the TypeSafe decision API.")
     p.add_argument("--judge-model", default=None, help="Model name / ID for the judge model.")
     p.add_argument("--judge-base-url", default=None, help="Base URL override for the judge model.")
     p.add_argument("--judge-api-key", default=None, help="API key for the judge model.")
@@ -155,7 +155,13 @@ def main() -> None:
     # judge backend/model is explicitly configured. Otherwise runner falls
     # back to using the same model as the one under test.
     judge_profile: InferenceProfile | None = None
-    if args.use_judge and args.judge_backend and args.judge_model:
+    if args.use_judge and args.judge_backend == "jev":
+        judge_profile = InferenceProfile(
+            backend="jev",
+            model=args.judge_model or "jev-1.13.0",
+            api_key=args.judge_api_key or os.getenv("TYPESAFE_API_KEY"),
+        )
+    elif args.use_judge and args.judge_backend and args.judge_model:
         judge_api_key = args.judge_api_key or os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
         judge_base_url = args.judge_base_url or (
             os.getenv("AZURE_OPENAI_ENDPOINT") if args.judge_backend == "azure" else None

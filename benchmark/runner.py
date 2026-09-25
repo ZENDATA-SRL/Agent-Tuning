@@ -14,6 +14,7 @@ from benchmark.inference import build_client
 from benchmark.inference.base import InferenceClient
 from benchmark.metrics.answer import AnswerMetrics, score_answer
 from benchmark.metrics.compliance import ComplianceMetrics, score_compliance
+from benchmark.metrics.jev_judge import JevJudge
 from benchmark.metrics.latency import LatencyMetrics, score_latency
 from benchmark.metrics.tool_calls import ToolCallMetrics, score_tool_calls
 from benchmark.replay import ReplayEngine, TraceReplayResult, _trace_messages
@@ -130,11 +131,13 @@ def run_benchmark(
     # Build inference clients
     client: InferenceClient = build_client(profile, session_id=session_id)
     judge_client: InferenceClient | None = None
+    jev_judge: JevJudge | None = None
     if use_judge:
-        judge_client = build_client(
-            judge_profile if judge_profile else profile,
-            session_id=session_id,
-        )
+        active_judge = judge_profile if judge_profile else profile
+        if active_judge.backend == "jev":
+            jev_judge = JevJudge(model=active_judge.model, api_key=active_judge.api_key)
+        else:
+            judge_client = build_client(active_judge, session_id=session_id)
 
     # tools=None means "read from each record"; tools=[] means "no tools"
     global_tools: list[dict] | None = tools
@@ -192,23 +195,37 @@ def run_benchmark(
         # Tool call metrics
         tc_metrics = score_tool_calls(replay_result)
 
+        answer_score: float | None = None
+        rule_score: float | None = None
+        if jev_judge is not None:
+            answer_score, rule_score = jev_judge.score_trace(
+                system_prompt=system_prompt,
+                full_trace=full_trace,
+                reference=reference_final,
+                generated=replay_result.generated_final_answer,
+            )
+
         # Answer metrics
         answer_metrics = score_answer(
             reference=reference_final,
             generated=replay_result.generated_final_answer,
-            use_judge=use_judge,
+            use_judge=use_judge and jev_judge is None,
             judge_client=judge_client,
             system_prompt=system_prompt,
         )
+        if jev_judge is not None:
+            answer_metrics.llm_judge_score = answer_score
 
         # Compliance metrics
         compliance_metrics = score_compliance(
             replay_result=replay_result,
             full_trace=full_trace,
-            use_judge=use_judge,
+            use_judge=use_judge and jev_judge is None,
             judge_client=judge_client,
             system_prompt=system_prompt,
         )
+        if jev_judge is not None:
+            compliance_metrics.rule_compliance_score = rule_score
 
         # Latency metrics
         latency_metrics = score_latency(replay_result)

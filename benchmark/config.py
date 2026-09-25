@@ -15,9 +15,10 @@ class InferenceProfile:
       azure    → langchain-openai AzureChatOpenAI (Azure OpenAI Service)
       ollama   → langchain-ollama ChatOllama
       bedrock  → langchain-aws ChatBedrockConverse
+      jev      → TypeSafe Jev judge only (not a generation backend)
     """
 
-    backend: Literal["openai", "vllm", "ollama", "bedrock", "azure"]
+    backend: Literal["openai", "vllm", "ollama", "bedrock", "azure", "jev"]
     model: str
 
     # OpenAI / vLLM

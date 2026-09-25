@@ -9,6 +9,7 @@ dependencies = [
     "langchain-ollama>=1.1.0",
     "langchain-openai>=1.6.6",
     "python-dotenv>=1.2.3",
+    "typesafe-sdk>=0.7.1",
     "tqdm>=4.70.1",
     "vllm==0.21.0",
 ]
