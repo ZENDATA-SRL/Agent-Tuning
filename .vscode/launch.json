@@ -15,6 +15,18 @@
             "justMyCode": false
         },
         {
+            "name": "Train: Gemma4-E2B SFT",
+            "type": "debugpy",
+            "request": "launch",
+            "preLaunchTask": "uv sync unsloth-training",
+            "python": "${workspaceFolder}/train/.venv/bin/python",
+            "program": "${workspaceFolder}/scripts/train_gemma4_sft.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
+        },
+        {
             "name": "Train: Qwen3-8B GRPO",
             "type": "debugpy",
             "request": "launch",
