@@ -60,6 +60,9 @@ def run_sft(config: SFTConfig) -> None:
     model.generation_config.top_p = config.generation_top_p
     model.generation_config.top_k = config.generation_top_k
     model.generation_config.min_p = config.generation_min_p
+    # The checkpoint may define max_length=40960. GenerationCallback passes
+    # max_new_tokens explicitly, so remove the conflicting legacy default.
+    model.generation_config.max_length = None
 
     print(f"[sft] Loading dataset: {config.dataset_path}")
     if config.dataset_fraction < 1.0:

@@ -104,6 +104,8 @@ def _traces_ending_with_assistant(record: dict) -> list[dict]:
     messages = list(record.get("messages") or [])
     pieces: list[dict] = []
     for index, message in enumerate(messages):
+        if index == 0:
+            continue
         if not isinstance(message, dict):
             continue
         if _normalize_role(str(message.get("role", ""))) != "assistant":
