@@ -13,7 +13,7 @@ from train.config import (
 # Un checkpoint "*-unsloth-bnb-4bit" evita di scaricare ~16 GB di pesi fp16
 # e di quantizzarli a ogni avvio.
 RECIPE = ModelRecipe(
-    id="gemma4_e2b_unsloth_bnb_4bit",
+    id="unsloth/gemma-4-E2B-it-unsloth-bnb-4bit",
     model_name="unsloth/gemma-4-E2B-it-unsloth-bnb-4bit",
     max_seq_length=16384,
     load_in_4bit=True,
@@ -61,8 +61,8 @@ RECIPE = ModelRecipe(
     sft_defaults=SFTHyperparams(
         learning_rate=2e-4,
         num_train_epochs=2.0,
-        per_device_train_batch_size=2,
-        gradient_accumulation_steps=4,
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=2,
         warmup_ratio=0.03,
         weight_decay=0.01,
         lr_scheduler_type="cosine",
@@ -76,6 +76,7 @@ RECIPE = ModelRecipe(
         gradient_checkpointing="unsloth",
         loss_masking="unsloth_responses_only",
         last_response_only=True,
+        train_on_tool_calls_only=False,
     ),
     # Punti di partenza per GRPO su LoRA 4-bit, non un run già tarato.
     # Learning rate più basso dell'SFT: il vantaggio policy è rumoroso.

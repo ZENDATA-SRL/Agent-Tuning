@@ -10,7 +10,8 @@ dependencies = [
     "langchain-openai>=1.6.6",
     "python-dotenv>=1.2.3",
     "tqdm>=4.70.1",
-    "vllm==0.21.0",
+    "transformers==5.14.1",
+    "vllm==0.27.1",
 ]
 
 [tool.uv]

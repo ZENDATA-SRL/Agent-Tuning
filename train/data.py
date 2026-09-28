@@ -152,6 +152,32 @@ def limit_traces(dataset: Dataset, max_traces: int | None) -> Dataset:
     return dataset.select(range(max_traces))
 
 
+def _ends_with_tool_call(record: dict) -> bool:
+    """True if the last message is an assistant turn with at least one tool call."""
+    messages = record.get("messages") or []
+    if not messages:
+        return False
+    last = messages[-1]
+    if not isinstance(last, dict):
+        return False
+    if _normalize_role(str(last.get("role", ""))) != "assistant":
+        return False
+    tool_calls = last.get("tool_calls") or []
+    return isinstance(tool_calls, list) and len(tool_calls) > 0
+
+
+def filter_tool_call_traces(dataset: Dataset) -> Dataset:
+    """Keep only traces whose last message is an assistant tool call."""
+    keep = [
+        index
+        for index, row in enumerate(dataset)
+        if _ends_with_tool_call(dict(row))
+    ]
+    if not keep:
+        return dataset.select([])
+    return dataset.select(keep)
+
+
 # Langchain-style traces use "human"/"ai", OpenAI uses "user"/"assistant".
 # Normalise to OpenAI canonical so `apply_chat_template` understands them.
 _ROLE_MAPPING = {

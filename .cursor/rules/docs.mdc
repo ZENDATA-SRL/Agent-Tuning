@@ -1,0 +1,20 @@
+---
+alwaysApply: true
+---
+# Open Source Documentation Standards
+
+## Core Principles
+- Write for a developer audience: clear, concise, and scannable.
+- Avoid jargon; explain non-standard architecture choices immediately.
+- Keep sentences short and use active voice.
+
+## Markdown & Structure
+- Every major feature or module needs a clear heading hierarchy (`#`, `##`, `###`).
+- Include a quick copy-pasteable code snippet for installation and basic usage.
+- Use callouts (`> [!NOTE]` or `> [!WARNING]`) for important caveats or breaking changes.
+- Add markdown badges or other special objects if you think can help visualization.
+
+## Code Comments & Docstrings
+- Require JSDoc for JavaScript/TypeScript functions and Google-style docstrings for Python.
+- Explain *why* a complex logic choice was made, not just *what* the code does.
+- Keep code examples inside documentation up to date with the latest API changes.

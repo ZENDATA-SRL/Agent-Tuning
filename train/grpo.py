@@ -1,29 +1,22 @@
 """Group Relative Policy Optimization loop (TRL GRPOTrainer + Unsloth LoRA)."""
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from datasets import Dataset
+from train.setup import configure_env
 
-from train.config import GRPOConfig, partition_trainer_kwargs
-from train.data import format_grpo_dataset, limit_traces, load_prepared_splits
+# Must run before Hugging Face imports so a deprecated HF_TRANSFER value
+# already present in the process environment is dropped first.
+configure_env()
+
+from datasets import Dataset  # noqa: E402
+
+from train.config import GRPOConfig, partition_trainer_kwargs  # noqa: E402
+from train.data import format_grpo_dataset, limit_traces, load_prepared_splits  # noqa: E402
 
 RewardFunc = Callable[..., list[float | None]]
-
-
-def _sanitize_wandb_env() -> None:
-    for key in (
-        "WANDB_TAGS",
-        "WANDB_PROJECT",
-        "WANDB_NAME",
-        "WANDB_ENTITY",
-        "WANDB_MODE",
-    ):
-        if os.environ.get(key, "").strip() == "":
-            os.environ.pop(key, None)
 
 
 def _load_model_and_tokenizer(config: GRPOConfig) -> tuple[Any, Any]:
@@ -91,8 +84,7 @@ def run_grpo(
     reward_funcs: RewardFunc | Sequence[RewardFunc],
 ) -> None:
     """Run GRPO and persist the LoRA adapter to `config.output_dir`."""
-    os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
-    _sanitize_wandb_env()
+    configure_env()
 
     from trl import GRPOConfig as TRLGRPOConfig  # type: ignore
     from trl import GRPOTrainer  # type: ignore

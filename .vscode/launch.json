@@ -68,6 +68,23 @@
             ]
         },
         {
+            "name": "Benchmark: vLLM gemma4-e2b-no-lora",
+            "type": "debugpy",
+            "request": "launch",
+            "preLaunchTask": "uv sync benchmark",
+            "python": "${workspaceFolder}/benchmark/.venv/bin/python",
+            "module": "benchmark",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--dataset", "data/umore/ecf97df8-8b35-4bad-915d-2a9a8665fac6/eval.jsonl",
+                "--backend", "vllm",
+                "--model", "unsloth/gemma-4-E2B-it-unsloth-bnb-4bit",
+                "--base-url", "http://localhost:8000/v1"
+            ]
+        },
+        {
             "name": "Benchmark: vLLM Qwen3-8B-no-lora",
             "type": "debugpy",
             "request": "launch",

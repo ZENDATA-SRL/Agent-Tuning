@@ -16,7 +16,7 @@ from train import load_model, run_sft  # noqa: E402
 def main() -> None:
     from dotenv import load_dotenv
     load_dotenv()
-    recipe = load_model("qwen3_8b_unsloth_bnb_4bit")
+    recipe = load_model("unsloth/Qwen3-8B-unsloth-bnb-4bit")
     config = recipe.sft(
         dataset_path="data/umore/umore_openai.json",
         output_dir="outputs/sft-qwen3-8b-umore",

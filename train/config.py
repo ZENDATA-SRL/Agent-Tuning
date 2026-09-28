@@ -73,6 +73,9 @@ class SFTHyperparams:
     # "assistant_turns": maschera custom su ogni turno assistant.
     loss_masking: LossMasking
     last_response_only: bool
+    # Se True, tieni solo le tracce il cui ultimo messaggio è un assistant
+    # con almeno una tool call.
+    train_on_tool_calls_only: bool
 
 
 @dataclass(frozen=True)
@@ -165,6 +168,7 @@ class ModelRecipe:
             gradient_checkpointing=self.sft_defaults.gradient_checkpointing,
             loss_masking=self.sft_defaults.loss_masking,
             last_response_only=self.sft_defaults.last_response_only,
+            train_on_tool_calls_only=self.sft_defaults.train_on_tool_calls_only,
             generation_do_sample=self.generation.do_sample,
             generation_temperature=self.generation.temperature,
             generation_top_p=self.generation.top_p,
@@ -397,6 +401,9 @@ class SFTConfig:
     gradient_checkpointing: str | bool
     loss_masking: LossMasking
     last_response_only: bool
+    # Se True, tieni solo le tracce il cui ultimo messaggio è un assistant
+    # con almeno una tool call.
+    train_on_tool_calls_only: bool
 
     # Sampling
     generation_do_sample: bool

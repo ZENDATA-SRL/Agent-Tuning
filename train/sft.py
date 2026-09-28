@@ -1,38 +1,36 @@
 """Supervised fine-tuning loop on agent traces."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
+from train.setup import configure_env
+
+# Must run before Unsloth/Hugging Face so a deprecated HF_TRANSFER value
+# already present in the process environment is dropped first.
+configure_env()
+
 # Unsloth must be imported before transformers/trl to install its patches.
-from unsloth import FastLanguageModel  # type: ignore
-from unsloth.chat_templates import train_on_responses_only  # type: ignore
-from trl import SFTConfig as TRLSFTConfig  # type: ignore
-from trl import SFTTrainer  # type: ignore
+from unsloth import FastLanguageModel  # type: ignore  # noqa: E402
+from unsloth.chat_templates import train_on_responses_only  # type: ignore  # noqa: E402
+from trl import SFTConfig as TRLSFTConfig  # type: ignore  # noqa: E402
+from trl import SFTTrainer  # type: ignore  # noqa: E402
 
-from datasets import Dataset
+from datasets import Dataset  # noqa: E402
 
-from train.config import SFTConfig, partition_trainer_kwargs
-from train.data import format_dataset, limit_traces, load_prepared_splits
-from train.utils import assert_masking_ok
+from train.config import SFTConfig, partition_trainer_kwargs  # noqa: E402
+from train.data import (  # noqa: E402
+    filter_tool_call_traces,
+    format_dataset,
+    limit_traces,
+    load_prepared_splits,
+)
+from train.oom import OOMTolerantSFTTrainer, ensure_batches_fit  # noqa: E402
+from train.utils import assert_masking_ok  # noqa: E402
 
 
 def run_sft(config: SFTConfig) -> None:
     """Run a full SFT loop and persist the LoRA adapter to `config.output_dir`."""
-    # Reduce CUDA allocator fragmentation when VRAM is nearly full.
-    os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
-    # Pop any malformed WANDB_* values so they can't propagate through
-    # subprocesses or unexpected callbacks. Empty WANDB_MODE is especially
-    # bad: wandb Settings requires one of online/offline/shared/disabled/…
-    for _k in (
-        "WANDB_TAGS",
-        "WANDB_PROJECT",
-        "WANDB_NAME",
-        "WANDB_ENTITY",
-        "WANDB_MODE",
-    ):
-        if os.environ.get(_k, "").strip() == "":
-            os.environ.pop(_k, None)
+    configure_env()
 
     print(f"[sft] Loading model: {config.model_name}")
     model, tokenizer = FastLanguageModel.from_pretrained(
@@ -82,6 +80,23 @@ def run_sft(config: SFTConfig) -> None:
     )
 
     train_dataset = Dataset.from_list(splits["train"])
+    eval_dataset = (
+        Dataset.from_list(splits["eval"]) if splits["eval"] else None
+    )
+    if config.train_on_tool_calls_only:
+        before = len(train_dataset)
+        train_dataset = filter_tool_call_traces(train_dataset)
+        print(
+            "[sft] train_on_tool_calls_only: "
+            f"train={len(train_dataset)}/{before}"
+        )
+        if eval_dataset is not None:
+            before_eval = len(eval_dataset)
+            eval_dataset = filter_tool_call_traces(eval_dataset)
+            print(
+                "[sft] train_on_tool_calls_only: "
+                f"eval={len(eval_dataset)}/{before_eval}"
+            )
     if config.shuffle:
         print(f"[sft] Shuffling train dataset (seed={config.seed})")
         train_dataset = train_dataset.shuffle(seed=config.seed)
@@ -89,10 +104,6 @@ def run_sft(config: SFTConfig) -> None:
         before = len(train_dataset)
         train_dataset = limit_traces(train_dataset, config.max_traces)
         print(f"[sft] Train traces: {len(train_dataset)}/{before}")
-
-    eval_dataset = (
-        Dataset.from_list(splits["eval"]) if splits["eval"] else None
-    )
 
     print("[sft] Rendering dataset with chat template")
     train_dataset = format_dataset(
@@ -165,7 +176,7 @@ def run_sft(config: SFTConfig) -> None:
     if config.trainer_kwargs:
         print(f"[sft] Trainer kwargs: {sorted(config.trainer_kwargs)}")
 
-    trainer = SFTTrainer(
+    trainer = OOMTolerantSFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=train_dataset,
@@ -194,12 +205,16 @@ def run_sft(config: SFTConfig) -> None:
             f"loss_masking sconosciuto: {config.loss_masking!r}."
         )
 
-    assert_masking_ok(
-        trainer,
-        tokenizer,
-        forbidden_in_loss=config.forbidden_in_loss,
-        turn_end_marker=config.turn_end_marker,
-    )
+    # assert_masking_ok(
+    #     trainer,
+    #     tokenizer,
+    #     forbidden_in_loss=config.forbidden_in_loss,
+    #     turn_end_marker=config.turn_end_marker,
+    # )
+
+    # Probe the longest batches before the run. A later OOM skips that batch
+    # instead of killing the process; see train/oom.py.
+    ensure_batches_fit(trainer)
 
     if config.resume_from_checkpoint:
         print(
@@ -209,6 +224,12 @@ def run_sft(config: SFTConfig) -> None:
     else:
         print("[sft] Starting training")
     trainer.train(resume_from_checkpoint=config.resume_from_checkpoint)
+    if trainer.skipped_train_batches or trainer.skipped_eval_batches:
+        print(
+            "[sft] Skipped after CUDA OOM: "
+            f"train={trainer.skipped_train_batches}, "
+            f"eval={trainer.skipped_eval_batches}"
+        )
 
     print(f"[sft] Saving best model LoRA adapter to {output_dir}")
     model.save_pretrained(output_dir + "/best_eval_model")

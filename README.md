@@ -1,187 +1,150 @@
 # Agent-Tuning
 
-A simple, end-to-end stack for fine-tuning an LLM to a specific agent tool-calling context while preserving general knowledge.
+Toolkit for training and evaluating language models on agent traces, with a focus on reliable tool calling.
 
----
+The repository contains two independent Python environments:
 
-## Overview
+- `train/`: LoRA/QLoRA fine-tuning with Unsloth and TRL.
+- `benchmark/`: trace replay and model evaluation through LangChain clients.
 
-Agent-Tuning takes a dataset of agent execution traces and guides it through a full MLOps lifecycle: benchmark your baseline, expand your dataset, prevent catastrophic forgetting, and fine-tune your model.
+It also includes a small FastAPI playground for trying saved adapters.
 
-### Dataset Format
+> [!WARNING]
+> Training requires a CUDA-capable GPU. The benchmark package is a client: start vLLM or Ollama separately when using a local model.
 
-All pipelines in this repository expect a dataset with the following three columns:
+## Repository layout
 
-| Column | Type | Description |
-|---|---|---|
-| `trace_id` | `string` | Unique identifier for the trace |
-| `full_trace` | `list` | The complete agent execution trace (tool calls, observations, reasoning steps) |
-| `tools` | `list` | The list of openai formatted tool definition and schemas |
-| `final_answer` | `string` | The final answer produced by the agent at the end of the trace |
-
----
-
-## Features
-
-### 1. Benchmarking
-
-Evaluate your model's performance against your trace dataset before and after fine-tuning.
-
-- Serve your model locally via **vLLM** or **Ollama**
-- Run inference over your dataset and collect performance metrics
-- Metrics include accuracy, tool-call precision/recall, latency, and throughput
-- Compare baseline vs. fine-tuned model side by side
-
-### 2. Dataset Generation & Expansion
-
-Grow your initial trace dataset using automated data generation pipelines.
-
-- Generate new synthetic traces from your existing samples
-- Support for **external LLM providers** (OpenAI, Anthropic, etc.) and **local models**
-- Configurable generation strategies: paraphrasing, augmentation, tool-call variation
-- Output format matches the three-column schema for seamless pipeline compatibility
-
-### 3. General Dataset Expansion (Anti-Catastrophic Forgetting)
-
-Blend in open-source general-purpose datasets to prevent the model from losing broad reasoning and language capabilities during fine-tuning.
-
-- Curated selection of open-source datasets covering general instruction-following and reasoning ([Nemotron dataset](https://huggingface.co/datasets/nvidia/Nemotron-Agentic-v1), [Dataset Library](https://github.com/mlabonne/llm-datasets))
-- Configurable mixing ratio between domain-specific traces and general data
-- Ensures fine-tuned models retain knowledge outside the agent tool-calling context
-
-### 4. LLM Fine-Tuning
-
-Fine-tune your LLM on the expanded, mixed dataset.
-
-- Supports parameter-efficient fine-tuning methods (LoRA, QLoRA)
-- Compatible with models served via vLLM or Ollama
-- Training configuration managed through a single config file
-- Checkpointing and evaluation hooks built in
-
----
-
-## Pipeline
-
-```
-Your Trace Dataset
-(trace_id | full_trace | final_answer)
-         │
-         ▼
-┌─────────────────────┐
-│    Benchmarking     │  ← Baseline metrics before tuning
-└─────────────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│ Dataset Generation  │  ← Expand with synthetic traces
-│   & Expansion       │
-└─────────────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│  General Dataset    │  ← Mix in open-source data
-│    Expansion        │
-└─────────────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│   LLM Fine-Tuning   │  ← Train on expanded dataset
-└─────────────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│    Benchmarking     │  ← Post-tuning metrics & comparison
-└─────────────────────┘
+```text
+.
+├── train/                 # SFT and GRPO training environment
+├── benchmark/             # Replay engine, inference clients, and metrics
+├── scripts/               # Runnable training and dataset utilities
+├── app/backend/           # FastAPI playground backend
+├── app/frontend/          # Playground UI
+├── data/                  # Local datasets (ignored by git)
+└── outputs/               # Checkpoints and reports (ignored by git)
 ```
 
----
+## Dataset format
 
-## Getting Started
+Datasets are JSONL files: one trace per line. The current schema uses `messages`; legacy files using `full_trace` are also accepted by the benchmark.
 
-### Environments
+```json
+{
+  "trace_id": "trace-001",
+  "messages": [
+    {"role": "system", "content": "You are an assistant."},
+    {"role": "user", "content": "Find my latest invoice."},
+    {"role": "assistant", "content": "", "tool_calls": [{"id": "call-1", "name": "get_invoice", "args": {"limit": 1}}]},
+    {"role": "tool", "tool_call_id": "call-1", "content": "{\"id\": \"inv-001\"}"},
+    {"role": "assistant", "content": "Your latest invoice is inv-001."}
+  ],
+  "tools": [{"type": "function", "function": {"name": "get_invoice", "description": "Get invoices.", "parameters": {"type": "object", "properties": {}}}}],
+  "final_answer": "Your latest invoice is inv-001."
+}
+```
 
-Training and benchmarking use separate `uv` projects because their PyTorch
-requirements are not compatible. The environments live in the same repository
-but have independent lockfiles:
+Required fields are `trace_id` (or `id`) and `messages` (or `full_trace`). `tools` can be supplied per trace. `final_answer` is optional; when absent, the last assistant message is used.
+
+## Installation
+
+Install [uv](https://docs.astral.sh/uv/) and create the environment you need:
 
 ```bash
-# Training: creates/updates train/.venv
-uv sync --project train
-uv run --project train python scripts/train_qwen3_grpo.py
+uv sync --project train       # GPU training
+uv sync --project benchmark   # evaluation clients
+cp .env.example .env
+```
 
-# Benchmarking: creates/updates benchmark/.venv
-uv sync --project benchmark
+Keep the environments separate. Their PyTorch and inference dependencies are not intended to share one virtual environment.
+
+## Fine-tuning
+
+Model recipes live in `train/configs/`. The included Qwen3 recipe can be launched with the ready-to-edit scripts:
+
+```bash
+uv run --project train python scripts/train_qwen3_sft.py
+uv run --project train python scripts/train_qwen3_grpo.py
+```
+
+Edit the dataset and output paths in the selected script before running it. Each recipe creates a unique output directory and saves a LoRA adapter:
+
+- SFT: `outputs/.../best_eval_model`
+- GRPO: `outputs/.../best_model`
+
+SFT masks the loss to assistant responses. GRPO accepts one or more reward functions; the example uses tool-call format, tool-name matching, and non-empty completion rewards. An SFT adapter can be passed to GRPO through `lora_adapter_path`.
+
+For remote training, configure the `SSH_REMOTE_*` variables in `.env`. The training wrapper syncs the project and dataset over SSH, streams logs, and can fetch the resulting adapter. The remote host must have a compatible Python environment and CUDA stack.
+
+### Experiment tracking
+
+Set `WANDB_API_KEY` in `.env` and enable W&B in the training configuration. Use `WANDB_MODE=offline` when the training host cannot access W&B; the run can be synchronized later with `wandb sync`.
+
+## Benchmarking
+
+The benchmark replays tool-calling and final-answer turns from each trace. Reference intermediate turns are injected back into the conversation, keeping the evaluation deterministic while measuring the model's decisions.
+
+Supported backends:
+
+- `openai`: OpenAI or another OpenAI-compatible hosted endpoint.
+- `vllm`: an OpenAI-compatible vLLM server.
+- `ollama`: a local or remote Ollama server.
+- `azure`: Azure OpenAI.
+- `bedrock`: AWS Bedrock Converse.
+
+Example against a local vLLM server:
+
+```bash
 uv run --project benchmark python -m benchmark \
-  --dataset data/umore/d9682064-3916-4915-99bd-cfab2c8d624d/eval.jsonl \
+  --dataset data/traces.jsonl \
   --backend vllm \
   --model qwen-umore \
-  --base-url http://localhost:8000/v1
+  --base-url http://localhost:8000/v1 \
+  --max-traces 5 \
+  --output outputs/benchmark.json
 ```
 
-The benchmark environment is a client only: vLLM should be running separately
-as a server. The VS Code launch configurations use the corresponding
-environment automatically.
-
-### Supervised Fine-Tuning (SFT)
-
-The `train/` package implements an SFT pipeline on top of [Unsloth](https://docs.unsloth.ai) + QLoRA, with loss masking on the assistant tokens only. Defaults target `unsloth/gemma-4-E4B-it-unsloth-bnb-4bit` (a pre-quantized 4-bit checkpoint) on a single consumer GPU but the same CLI works for Qwen2.5, Llama-3.1, etc. — just override `--model-name`. The chat-template wire format and the loss-masking markers are picked automatically by `train/templates.py` based on the model id; add a new family by registering a `ChatTemplateAdapter` there.
-
-#### Local run
-
-Requires a CUDA-capable GPU on the same machine.
+For a quick Ollama run:
 
 ```bash
-pip install -r requirements.txt
-python -m train \
-  --dataset data/traces-2026-05-18.jsonl \
-  --output-dir outputs/sft-gemma4-e4b-v1
+uv run --project benchmark python -m benchmark \
+  --dataset data/traces.jsonl \
+  --backend ollama \
+  --model llama3.1:8b
 ```
 
-#### Remote run over SSH
+The report includes tool-call, answer, compliance, and latency metrics. Add `--use-judge` to score answer quality and rule compliance with an LLM judge. By default the tested model is reused as the judge; configure `--judge-backend` and `--judge-model` to use a separate one.
 
-When you don't have a local GPU, the same CLI can drive a remote host: the project tree and dataset are rsynced over, training runs there, and the LoRA adapter is rsynced back when it finishes. Logs stream live to your terminal.
+Use `--max-traces N` for smoke tests. If `--output` is omitted, the report is written next to the dataset with a model-specific filename.
 
-1. Copy `.env.example` → `.env` and fill in the `SSH_REMOTE_*` block (host, user, path to the Python interpreter on the remote, etc.).
-2. Make sure `ssh user@host` works non-interactively (key-based auth, no password prompts).
-3. Add `--remote` to the same command:
+## Playground
+
+The backend exposes `GET /api/health`, `GET /api/adapters`, `GET /api/system-prompt`, and `POST /api/chat`.
+
+Start it from the repository root with:
 
 ```bash
-python -m train --remote \
-  --dataset data/traces-2026-05-18.jsonl \
-  --output-dir outputs/sft-gemma4-e4b-v1
+uv run --project train python -m app.backend
 ```
 
-#### Tracking with Weights & Biases
+The backend discovers adapters from the configured local output directories. The frontend lives in `app/frontend/`; use the package manager and scripts defined by that application to run the UI.
 
-Add `--wandb` (or any `--wandb-*` flag) to enable telemetry. Loss, learning rate, gradient norm, throughput, the full `SFTConfig`, the trainable-parameter count, and basic GPU/system info are pushed live to the W&B dashboard.
+## Configuration
 
-1. Put your `WANDB_API_KEY` in `.env` (see `.env.example` for the full block of supported variables: `WANDB_PROJECT`, `WANDB_ENTITY`, `WANDB_TAGS`, `WANDB_MODE`).
-2. Run training with the `--wandb` shortcut, optionally overriding the project/tags from the CLI:
+`.env.example` documents the supported integrations:
 
-```bash
-python -m train --wandb \
-  --wandb-project agent-tuning \
-  --wandb-tags sft,gemma-4,real-dataset \
-  --dataset data/traces-2026-05-18.jsonl \
-  --output-dir outputs/sft-gemma4-e4b-v1
-```
+- Langfuse dataset enrichment.
+- Hugging Face/training model selection.
+- Weights & Biases.
+- SSH remote training.
+- OpenAI, Azure, AWS, and local inference credentials.
 
-For a remote run, just combine `--remote` and `--wandb`. The `WANDB_*` variables are automatically forwarded over SSH so you don't need a second copy of the API key on the GPU host:
+Never commit `.env`, datasets, model weights, or generated reports.
 
-```bash
-python -m train --remote --wandb \
-  --dataset data/traces-2026-05-18.jsonl \
-  --output-dir outputs/sft-gemma4-e4b-v1
-```
+## Development
 
-The run name is auto-derived as `<output_dir_basename>-<model_short_name>-<utc_timestamp>` so each run is unique and easy to correlate with its local checkpoint. Override it explicitly with `--wandb-run-name`.
-
-Set `WANDB_MODE=offline` to log to disk only (useful when the remote can't reach `api.wandb.ai`); you can `wandb sync` the run directory later from a connected machine.
-
-The remote workflow assumes that the project's Python dependencies (Unsloth, torch, etc.) are already installed in the venv pointed to by `SSH_REMOTE_PYTHON`. The wrapper does not re-install them on every run.
-
----
+Run commands from the repository root. Keep generated data under `data/` and checkpoints under `outputs/`; both are ignored by git. Add a model recipe under `train/configs/` when a new chat template or checkpoint needs dedicated defaults.
 
 ## Contributing
 
-> Contribution guidelines coming soon.
+Issues and pull requests are welcome. Please include the dataset schema, training recipe, benchmark command, and relevant metrics when reporting a change.

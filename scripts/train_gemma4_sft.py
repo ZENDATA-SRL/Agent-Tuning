@@ -16,12 +16,13 @@ from train import load_model, run_sft  # noqa: E402
 def main() -> None:
     from dotenv import load_dotenv
     load_dotenv()
-    recipe = load_model("gemma4_e2b_unsloth_bnb_4bit")
+    recipe = load_model("unsloth/gemma-4-E2B-it-unsloth-bnb-4bit")
     config = recipe.sft(
-        dataset_path="data/umore/umore_openai.json",
+        dataset_path="data/umore/umore_july.json",
         output_dir="outputs/sft-gemma4-e2b-umore",
-        shuffle=True,
-        dataset_fraction=0.30, # use only 50% of the dataset to speed up training
+        shuffle=False,
+        train_on_tool_calls_only=True,
+        dataset_fraction=1.00, # use only 50% of the dataset to speed up training
         #lora_dropout=0.05,
 
         # Override default params of the model
