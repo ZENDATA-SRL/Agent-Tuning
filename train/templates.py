@@ -11,6 +11,14 @@ import json
 from copy import deepcopy
 from typing import Any, Mapping
 
+from shared.tool_calls import split_parallel_tool_calls
+
+__all__ = [
+    "coerce_tool_arguments_for_template",
+    "render_chat",
+    "split_parallel_tool_calls",
+]
+
 
 def _parse_tool_arguments(arguments: Any) -> Any:
     """Return tool arguments as a mapping when they are a JSON object string.

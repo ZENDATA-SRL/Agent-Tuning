@@ -1,10 +1,15 @@
-"""Schemas for a model recipe and the training methods it supports."""
+"""Schemas for a model recipe shared by train and benchmark.
+
+Training loops consume ``SFTConfig`` / ``GRPOConfig``. Serving (vLLM) reads
+``VLLMSpec`` and chat/generation knobs from the same ``ModelRecipe``.
+"""
 from __future__ import annotations
 
 import inspect
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping
+from collections.abc import Callable, Mapping
+from typing import Any, Literal
 
 
 def _resolve_run(output_dir: str, run_id: str | None) -> tuple[str, str]:
@@ -47,8 +52,26 @@ class ChatTemplateSpec:
     # Suffisso appeso al prompt di eval per forzare il formato di generazione
     # (ruolo assistant, thinking disattivato, ecc.).
     generation_prompt_suffix: str
+    # False → parallel tool calls are split into sequential single-call turns
+    # before rendering (required by templates like Llama 3.1).
+    support_multi_tool_calls: bool
     # Kwargs inoltrati a `tokenizer.apply_chat_template` (es. enable_thinking).
     template_kwargs: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class VLLMSpec:
+    """Serving knobs for ``vllm serve`` (benchmark / local OpenAI server)."""
+
+    # Value for ``--tool-call-parser`` (hermes, llama3_json, gemma4, …).
+    tool_call_parser: str
+    # Static dict or ``(model_id) -> dict`` for ``vllm serve --hf-overrides``.
+    # ``None`` → flag omitted. Defined on the model recipe when needed.
+    hf_overrides: dict[str, Any] | Callable[[str], dict[str, Any]] | None = None
+    # When set, override the server default for ``--max-model-len``.
+    max_model_len: int | None = None
+    # When set, override the server default for ``--gpu-memory-utilization``.
+    gpu_memory_utilization: float | None = None
 
 
 @dataclass(frozen=True)
@@ -103,9 +126,52 @@ class GRPOHyperparams:
     gradient_checkpointing: str | bool
 
 
+# Default method blocks. Recipes may ``replace()`` individual fields.
+BASE_SFT = SFTHyperparams(
+    learning_rate=2e-4,
+    num_train_epochs=2.0,
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=4,
+    warmup_ratio=0.03,
+    weight_decay=0.01,
+    lr_scheduler_type="cosine",
+    optim="adamw_8bit",
+    max_grad_norm=0.3,
+    seed=3407,
+    logging_steps=5,
+    save_steps=40,
+    eval_steps=40,
+    mixed_precision="bf16",
+    gradient_checkpointing="unsloth",
+    loss_masking="unsloth_responses_only",
+    last_response_only=True,
+    train_on_tool_calls_only=False,
+)
+
+BASE_GRPO = GRPOHyperparams(
+    learning_rate=5e-6,
+    num_train_epochs=1.0,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=4,
+    num_generations=4,
+    max_completion_length=16384,
+    beta=0.04,
+    warmup_ratio=0.03,
+    weight_decay=0.01,
+    lr_scheduler_type="cosine",
+    optim="adamw_8bit",
+    max_grad_norm=0.3,
+    seed=3407,
+    logging_steps=5,
+    save_steps=40,
+    mixed_precision="bf16",
+    gradient_checkpointing="unsloth",
+)
+
+
 @dataclass(frozen=True)
 class ModelRecipe:
-    """One supported checkpoint and the method configs that train it."""
+    """One supported checkpoint: train defaults plus serving (vLLM) knobs."""
 
     id: str
     model_name: str
@@ -114,8 +180,9 @@ class ModelRecipe:
     lora: LoRASpec
     generation: GenerationSpec
     chat: ChatTemplateSpec
-    sft_defaults: SFTHyperparams
-    grpo_defaults: GRPOHyperparams
+    vllm: VLLMSpec
+    sft_defaults: SFTHyperparams = BASE_SFT
+    grpo_defaults: GRPOHyperparams = BASE_GRPO
 
     def sft(
         self,
@@ -179,6 +246,7 @@ class ModelRecipe:
             response_part=self.chat.response_part,
             turn_end_marker=self.chat.turn_end_marker,
             forbidden_in_loss=self.chat.forbidden_in_loss,
+            support_multi_tool_calls=self.chat.support_multi_tool_calls,
             chat_template_kwargs=dict(self.chat.template_kwargs),
         )
         params["trainer_kwargs"] = _collect_trainer_kwargs(params, overrides)
@@ -251,6 +319,7 @@ class ModelRecipe:
             response_part=self.chat.response_part,
             turn_end_marker=self.chat.turn_end_marker,
             forbidden_in_loss=self.chat.forbidden_in_loss,
+            support_multi_tool_calls=self.chat.support_multi_tool_calls,
             chat_template_kwargs=dict(self.chat.template_kwargs),
         )
         params["trainer_kwargs"] = _collect_trainer_kwargs(params, overrides)
@@ -418,6 +487,7 @@ class SFTConfig:
     response_part: str
     turn_end_marker: str
     forbidden_in_loss: tuple[str, ...]
+    support_multi_tool_calls: bool
     chat_template_kwargs: dict[str, Any]
     # Kwargs assenti dallo schema: inoltrati a SFTTrainer / TRL SFTConfig.
     trainer_kwargs: dict[str, Any] = field(default_factory=dict)
@@ -483,6 +553,7 @@ class GRPOConfig:
     response_part: str
     turn_end_marker: str
     forbidden_in_loss: tuple[str, ...]
+    support_multi_tool_calls: bool
     chat_template_kwargs: dict[str, Any]
     # Kwargs assenti dallo schema: inoltrati a GRPOTrainer / TRL GRPOConfig.
     trainer_kwargs: dict[str, Any] = field(default_factory=dict)

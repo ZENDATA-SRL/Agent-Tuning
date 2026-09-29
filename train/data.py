@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 from datasets import Dataset, load_dataset
 
-from train.templates import render_chat
+from train.templates import render_chat, split_parallel_tool_calls
 
 # Hold out test and eval from a single JSON file. The caller only passes
 # `dataset_path`; the split happens here, before any per-turn expansion.
@@ -116,18 +116,45 @@ def _traces_ending_with_assistant(record: dict) -> list[dict]:
     return pieces
 
 
+def _maybe_split_parallel_tool_calls(
+    record: dict,
+    *,
+    support_multi_tool_calls: bool,
+) -> dict:
+    """Return a copy with parallel tool_calls expanded when the model forbids them."""
+    if support_multi_tool_calls:
+        return record
+    messages = record.get("messages")
+    if not messages:
+        return record
+    expanded = dict(record)
+    expanded["messages"] = split_parallel_tool_calls(list(messages))
+    return expanded
+
+
 def load_prepared_splits(
     path: str,
     *,
     dataset_fraction: float = 1.0,
     temp_id: str | None = None,
+    support_multi_tool_calls: bool = True,
 ) -> dict[str, list[dict]]:
     """Split one dataset file, then cut traces so each ends on an assistant turn.
 
     The conversation-level split is written next to `path` as
     `<temp_id>/{train,test,eval}.jsonl` before per-turn expansion.
+
+    When ``support_multi_tool_calls`` is False, parallel tool_calls are split
+    into sequential single-call turns before the JSONL write and before the
+    per-assistant-turn expansion, so each call becomes its own training piece.
     """
-    rows = [dict(row) for row in load_json_dataset(path)]
+    rows = [
+        _maybe_split_parallel_tool_calls(
+            dict(row),
+            support_multi_tool_calls=support_multi_tool_calls,
+        )
+        for row in load_json_dataset(path)
+    ]
     splits = split_records(rows, dataset_fraction=dataset_fraction)
     split_dir = write_split_jsonl(path, splits, temp_id or str(uuid.uuid4()))
     print(f"Wrote split files to {split_dir}")
@@ -281,6 +308,7 @@ def format_dataset(
     tokenizer: Any,
     *,
     chat_template_kwargs: Mapping[str, Any] | None = None,
+    support_multi_tool_calls: bool = True,
 ) -> Dataset:
     """Render each record into a single training string (the "text" column)."""
     if len(records) == 0:
@@ -289,6 +317,8 @@ def format_dataset(
     texts: list[str] = []
     for rec in records:
         messages = trace_to_messages(rec)
+        if not support_multi_tool_calls:
+            messages = split_parallel_tool_calls(messages)
         tools = rec.get("tools") or []
         text = render_chat(
             tokenizer,
@@ -329,6 +359,7 @@ def format_grpo_dataset(
     tokenizer: Any,
     *,
     chat_template_kwargs: Mapping[str, Any] | None = None,
+    support_multi_tool_calls: bool = True,
 ) -> Dataset:
     """Build a GRPO dataset with a rendered `prompt` plus reference columns.
 
@@ -347,6 +378,8 @@ def format_grpo_dataset(
 
     for rec in records:
         messages = trace_to_messages(rec)
+        if not support_multi_tool_calls:
+            messages = split_parallel_tool_calls(messages)
         last_idx = _last_assistant_index(messages)
         prefix = messages[:last_idx]
         if not prefix:

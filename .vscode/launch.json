@@ -3,24 +3,12 @@
     "configurations": [
 
         {
-            "name": "Train: Qwen3-8B SFT",
+            "name": "Train: SFT",
             "type": "debugpy",
             "request": "launch",
             "preLaunchTask": "uv sync unsloth-training",
             "python": "${workspaceFolder}/train/.venv/bin/python",
-            "program": "${workspaceFolder}/scripts/train_qwen3_sft.py",
-            "console": "integratedTerminal",
-            "envFile": "${workspaceFolder}/.env",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false
-        },
-        {
-            "name": "Train: Gemma4-E2B SFT",
-            "type": "debugpy",
-            "request": "launch",
-            "preLaunchTask": "uv sync unsloth-training",
-            "python": "${workspaceFolder}/train/.venv/bin/python",
-            "program": "${workspaceFolder}/scripts/train_gemma4_sft.py",
+            "program": "${workspaceFolder}/scripts/train_sft.py",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",
             "cwd": "${workspaceFolder}",
@@ -51,48 +39,12 @@
             "justMyCode": false
         },
         {
-            "name": "Benchmark: vLLM qwen-umore",
+            "name": "Benchmark: vLLM",
             "type": "debugpy",
             "request": "launch",
             "preLaunchTask": "uv sync benchmark",
             "python": "${workspaceFolder}/benchmark/.venv/bin/python",
-            "program": "${workspaceFolder}/scripts/benchmark_qwen3_sft.py",
-            "console": "integratedTerminal",
-            "envFile": "${workspaceFolder}/.env",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false
-        },
-        {
-            "name": "Benchmark: vLLM gemma4-e2b-finetuned",
-            "type": "debugpy",
-            "request": "launch",
-            "preLaunchTask": "uv sync benchmark",
-            "python": "${workspaceFolder}/benchmark/.venv/bin/python",
-            "program": "${workspaceFolder}/scripts/benchmark_gemma4_sft.py",
-            "console": "integratedTerminal",
-            "envFile": "${workspaceFolder}/.env",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false
-        },
-        {
-            "name": "Benchmark: vLLM gemma4-e2b-no-lora",
-            "type": "debugpy",
-            "request": "launch",
-            "preLaunchTask": "uv sync benchmark",
-            "python": "${workspaceFolder}/benchmark/.venv/bin/python",
-            "program": "${workspaceFolder}/scripts/benchmark_gemma4_base.py",
-            "console": "integratedTerminal",
-            "envFile": "${workspaceFolder}/.env",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false
-        },
-        {
-            "name": "Benchmark: vLLM Qwen3-8B-no-lora",
-            "type": "debugpy",
-            "request": "launch",
-            "preLaunchTask": "uv sync benchmark",
-            "python": "${workspaceFolder}/benchmark/.venv/bin/python",
-            "program": "${workspaceFolder}/scripts/benchmark_qwen3_base.py",
+            "program": "${workspaceFolder}/scripts/benchmark.py",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",
             "cwd": "${workspaceFolder}",

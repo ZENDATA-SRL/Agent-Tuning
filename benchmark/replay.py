@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from benchmark.inference.base import GenerationResult, InferenceClient, ToolCall
+from shared.tool_calls import split_parallel_tool_calls
 
 
 @dataclass
@@ -37,6 +38,18 @@ def _trace_messages(trace: dict) -> list[dict]:
         return messages
     full_trace = trace.get("full_trace")
     return full_trace if isinstance(full_trace, list) else []
+
+
+def prepare_trace_messages(
+    trace: dict,
+    *,
+    support_multi_tool_calls: bool = True,
+) -> list[dict]:
+    """Return the conversation, optionally splitting parallel tool_calls."""
+    messages = list(_trace_messages(trace))
+    if support_multi_tool_calls:
+        return messages
+    return split_parallel_tool_calls(messages)
 
 
 def _last_assistant_content(messages: list[dict]) -> str:
@@ -153,19 +166,29 @@ class ReplayEngine:
 
     For every generated turn the REFERENCE message is still injected into the
     history afterwards, so the replay stays fully deterministic and offline.
+
+    When ``support_multi_tool_calls`` is False, parallel tool_calls in the
+    reference are expanded into sequential single-call turns before replay, so
+    each call is scored (and injected) independently.
     """
 
     def __init__(
         self,
         client: InferenceClient,
         tools: list[dict] | None = None,
+        *,
+        support_multi_tool_calls: bool = True,
     ) -> None:
         self._client = client
         self._tools = tools or []
+        self._support_multi_tool_calls = support_multi_tool_calls
 
     def replay(self, trace: dict) -> TraceReplayResult:
         trace_id = trace.get("trace_id", trace.get("id", ""))
-        full_trace = _trace_messages(trace)
+        full_trace = prepare_trace_messages(
+            trace,
+            support_multi_tool_calls=self._support_multi_tool_calls,
+        )
         reference_final_answer: str = trace.get(
             "final_answer", _last_assistant_content(full_trace)
         )

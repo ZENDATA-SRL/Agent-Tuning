@@ -5,12 +5,13 @@ import sys
 from pathlib import Path
 
 # Make the repo root importable when this script is run directly
-# (so `from train import ...` resolves without installing the package).
+# (so `from shared` / `from train` resolve without installing the package).
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from train import load_model, run_grpo  # noqa: E402
+from shared.configs import load_model  # noqa: E402
+from train import run_grpo  # noqa: E402
 from train.rewards import resolve_reward_funcs  # noqa: E402
 
 

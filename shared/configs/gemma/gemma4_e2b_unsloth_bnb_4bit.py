@@ -1,14 +1,49 @@
-"""Gemma4-E2B, checkpoint Unsloth 4-bit. SFT and GRPO defaults."""
+"""Gemma4-E2B, checkpoint Unsloth 4-bit. SFT, GRPO, and vLLM defaults."""
 from __future__ import annotations
 
-from train.config import (
+import json
+from pathlib import Path
+
+from shared.config import (
     ChatTemplateSpec,
     GenerationSpec,
     GRPOHyperparams,
     LoRASpec,
     ModelRecipe,
     SFTHyperparams,
+    VLLMSpec,
 )
+
+
+def gemma4_bnb_hf_overrides(model_id: str) -> dict:
+    """Rewrite Unsloth skip-module names into the prefixes vLLM actually checks.
+
+    Unsloth lists mixed-precision layers as Hugging Face paths such as
+    ``model.language_model.layers.0.mlp``. vLLM looks up
+    ``language_model.model.layers.0.mlp``. Without the rewrite, bf16 weights
+    are loaded into packed 4-bit parameters and the server exits on startup.
+
+    Args:
+        model_id: Hugging Face id of the Unsloth bitsandbytes checkpoint.
+
+    Returns:
+        A dict suitable for vLLM ``--hf-overrides``.
+    """
+    from huggingface_hub import hf_hub_download
+
+    config_path = hf_hub_download(model_id, "config.json")
+    quantization = json.loads(Path(config_path).read_text(encoding="utf-8"))[
+        "quantization_config"
+    ]
+    prefix = "model.language_model."
+    quantization["llm_int8_skip_modules"] = [
+        "language_model.model." + name[len(prefix):]
+        if name.startswith(prefix)
+        else name
+        for name in quantization["llm_int8_skip_modules"]
+    ]
+    return {"quantization_config": quantization}
+
 
 # Un checkpoint "*-unsloth-bnb-4bit" evita di scaricare ~16 GB di pesi fp16
 # e di quantizzarli a ogni avvio.
@@ -21,7 +56,7 @@ RECIPE = ModelRecipe(
         r=16,
         alpha=32,
         dropout=0.00,
-        # Proiezioni attention e MLP di Qwen3.
+        # Proiezioni attention e MLP di Gemma 4.
         target_modules=(
             "q_proj",
             "k_proj",
@@ -32,7 +67,6 @@ RECIPE = ModelRecipe(
             "down_proj",
         ),
     ),
-    # Sampling consigliato da Qwen3 in modalità non-thinking.
     generation=GenerationSpec(
         do_sample=True,
         temperature=1.0,
@@ -56,7 +90,13 @@ RECIPE = ModelRecipe(
         # Con enable_thinking=False non c'è nessun canale di thinking vuoto da chiudere,
         # a differenza di Qwen3.
         generation_prompt_suffix="<|turn>model\n",
+        support_multi_tool_calls=True,
         template_kwargs={"enable_thinking": False},
+    ),
+    vllm=VLLMSpec(
+        tool_call_parser="gemma4",
+        # Rewrite Unsloth skip-module names for bitsandbytes + vLLM.
+        hf_overrides=gemma4_bnb_hf_overrides,
     ),
     sft_defaults=SFTHyperparams(
         learning_rate=2e-4,

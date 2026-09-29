@@ -16,7 +16,12 @@ from benchmark.metrics.answer import AnswerMetrics, score_answer
 from benchmark.metrics.compliance import ComplianceMetrics, score_compliance
 from benchmark.metrics.latency import LatencyMetrics, score_latency
 from benchmark.metrics.tool_calls import ToolCallMetrics, score_tool_calls
-from benchmark.replay import ReplayEngine, TraceReplayResult, _trace_messages
+from benchmark.replay import (
+    ReplayEngine,
+    TraceReplayResult,
+    _trace_messages,
+    prepare_trace_messages,
+)
 from benchmark.report import build_report, save_report
 
 
@@ -170,8 +175,18 @@ def run_benchmark(
 
     # tools=None means "read from each record"; tools=[] means "no tools"
     global_tools: list[dict] | None = tools
+    support_multi = profile.support_multi_tool_calls
+    if not support_multi:
+        print(
+            "[benchmark] support_multi_tool_calls=False: "
+            "parallel tool_calls will be split into sequential turns"
+        )
     # Build a default replay engine (per-trace tools override it below)
-    replay_engine = ReplayEngine(client=client, tools=global_tools or [])
+    replay_engine = ReplayEngine(
+        client=client,
+        tools=global_tools or [],
+        support_multi_tool_calls=support_multi,
+    )
 
     records: list[TraceRecord] = []
 
@@ -214,7 +229,11 @@ def run_benchmark(
             else trace.get("tools", [])
         )
         if trace_tools is not replay_engine._tools:
-            replay_engine = ReplayEngine(client=client, tools=trace_tools)
+            replay_engine = ReplayEngine(
+                client=client,
+                tools=trace_tools,
+                support_multi_tool_calls=support_multi,
+            )
 
         # Replay
         replay_result: TraceReplayResult = replay_engine.replay(trace)
@@ -233,10 +252,14 @@ def run_benchmark(
             system_prompt=system_prompt,
         )
 
-        # Compliance metrics
+        # Compliance metrics (use the same prepared conversation as replay)
+        prepared_trace = prepare_trace_messages(
+            trace,
+            support_multi_tool_calls=support_multi,
+        )
         compliance_metrics = score_compliance(
             replay_result=replay_result,
-            full_trace=full_trace,
+            full_trace=prepared_trace,
             use_judge=use_judge,
             judge_client=judge_client,
             system_prompt=system_prompt,

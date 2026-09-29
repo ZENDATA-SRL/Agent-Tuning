@@ -60,14 +60,17 @@ Keep the environments separate. Their PyTorch and inference dependencies are not
 
 ## Fine-tuning
 
-Model recipes live in `train/configs/`. The included Qwen3 recipe can be launched with the ready-to-edit scripts:
+Model recipes live in `shared/configs/` (train hyperparams plus vLLM serving knobs such as `tool_call_parser`). Configure the run by editing constants at the top of the script (model id, dataset, output dir, …), then launch it — no CLI flags:
 
 ```bash
-uv run --project train python scripts/train_qwen3_sft.py
+# Edit MODEL_ID / DATASET_PATH / … in scripts/train_sft.py, then:
+uv run --project train python scripts/train_sft.py
+
+# Same pattern for GRPO:
 uv run --project train python scripts/train_qwen3_grpo.py
 ```
 
-Edit the dataset and output paths in the selected script before running it. Each recipe creates a unique output directory and saves a LoRA adapter:
+Each recipe creates a unique output directory and saves a LoRA adapter:
 
 - SFT: `outputs/.../best_eval_model`
 - GRPO: `outputs/.../best_model`
@@ -92,13 +95,10 @@ Supported backends:
 - `azure`: Azure OpenAI.
 - `bedrock`: AWS Bedrock Converse.
 
-The vLLM scripts stop other GPU processes, start the server, replay the dataset, then stop the server. Edit the dataset and checkpoint constants at the top of the script before launching it.
+The vLLM script stops other GPU processes, starts the server, replays the dataset, then stops the server. Edit constants at the top of `scripts/benchmark.py` (set `LORA_PATH` / `LORA_NAME` to `None` for a base-model run), then launch it — no CLI flags:
 
 ```bash
-uv run --project benchmark python scripts/benchmark_gemma4_sft.py
-uv run --project benchmark python scripts/benchmark_gemma4_base.py
-uv run --project benchmark python scripts/benchmark_qwen3_sft.py
-uv run --project benchmark python scripts/benchmark_qwen3_base.py
+uv run --project benchmark python scripts/benchmark.py
 ```
 
 Each scored turn prints only the reference action and the model action. The JSON report is still written next to the dataset.
@@ -154,7 +154,7 @@ Never commit `.env`, datasets, model weights, or generated reports.
 
 ## Development
 
-Run commands from the repository root. Keep generated data under `data/` and checkpoints under `outputs/`; both are ignored by git. Add a model recipe under `train/configs/` when a new chat template or checkpoint needs dedicated defaults.
+Run commands from the repository root. Keep generated data under `data/` and checkpoints under `outputs/`; both are ignored by git. Add a model recipe under `shared/configs/` when a new chat template, checkpoint, or vLLM parser needs dedicated defaults.
 
 ## Contributing
 

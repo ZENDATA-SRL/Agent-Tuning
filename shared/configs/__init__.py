@@ -1,11 +1,11 @@
-"""Registry of supported model recipes."""
+"""Registry of supported model recipes (train + benchmark / vLLM)."""
 from __future__ import annotations
 
 import importlib
 from functools import lru_cache
 from pathlib import Path
 
-from train.config import GRPOConfig, ModelRecipe, SFTConfig
+from shared.config import GRPOConfig, ModelRecipe, SFTConfig
 
 __all__ = [
     "GRPOConfig",
@@ -18,7 +18,7 @@ __all__ = [
 
 def _module_name(path: Path, package_dir: Path) -> str:
     relative = path.relative_to(package_dir).with_suffix("")
-    return "train.configs." + ".".join(relative.parts)
+    return "shared.configs." + ".".join(relative.parts)
 
 
 @lru_cache(maxsize=1)

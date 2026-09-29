@@ -56,7 +56,7 @@ import os
 
 from dotenv import load_dotenv
 
-from benchmark.config import InferenceProfile
+from benchmark.config import InferenceProfile, resolve_support_multi_tool_calls
 from benchmark.runner import run_benchmark
 
 load_dotenv()
@@ -119,6 +119,14 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Process only the first N traces (useful for smoke tests).",
     )
+    p.add_argument(
+        "--no-multi-tool-calls",
+        action="store_true",
+        help=(
+            "Split parallel reference tool_calls into sequential single-call "
+            "turns (required for Llama 3.1 and similar templates)."
+        ),
+    )
     return p.parse_args()
 
 
@@ -149,6 +157,10 @@ def main() -> None:
         temperature=args.temperature,
         max_tokens=args.max_tokens,
         extra=backend_extra,
+        support_multi_tool_calls=resolve_support_multi_tool_calls(
+            args.model,
+            False if args.no_multi_tool_calls else None,
+        ),
     )
 
     # Build judge profile only when --use-judge is requested and a separate

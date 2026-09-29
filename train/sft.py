@@ -17,7 +17,7 @@ from trl import SFTTrainer  # type: ignore  # noqa: E402
 
 from datasets import Dataset  # noqa: E402
 
-from train.config import SFTConfig, partition_trainer_kwargs  # noqa: E402
+from shared.config import SFTConfig, partition_trainer_kwargs  # noqa: E402
 from train.data import (  # noqa: E402
     filter_tool_call_traces,
     format_dataset,
@@ -67,10 +67,16 @@ def run_sft(config: SFTConfig) -> None:
         print(
             f"[sft] Using {config.dataset_fraction:g} of records from file"
         )
+    if not config.support_multi_tool_calls:
+        print(
+            "[sft] support_multi_tool_calls=False: "
+            "parallel tool_calls will be split into sequential turns"
+        )
     splits = load_prepared_splits(
         config.dataset_path,
         dataset_fraction=config.dataset_fraction,
         temp_id=config.temp_id,
+        support_multi_tool_calls=config.support_multi_tool_calls,
     )
     print(
         "[sft] Split sizes: "
@@ -107,11 +113,17 @@ def run_sft(config: SFTConfig) -> None:
 
     print("[sft] Rendering dataset with chat template")
     train_dataset = format_dataset(
-        train_dataset, tokenizer, chat_template_kwargs=config.chat_template_kwargs
+        train_dataset,
+        tokenizer,
+        chat_template_kwargs=config.chat_template_kwargs,
+        support_multi_tool_calls=config.support_multi_tool_calls,
     )
     if eval_dataset is not None:
         eval_dataset = format_dataset(
-            eval_dataset, tokenizer, chat_template_kwargs=config.chat_template_kwargs
+            eval_dataset,
+            tokenizer,
+            chat_template_kwargs=config.chat_template_kwargs,
+            support_multi_tool_calls=config.support_multi_tool_calls,
         )
 
     rendered = [f"train={len(train_dataset)}", f"test={len(splits['test'])}"]

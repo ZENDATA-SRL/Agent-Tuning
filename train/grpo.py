@@ -13,7 +13,7 @@ configure_env()
 
 from datasets import Dataset  # noqa: E402
 
-from train.config import GRPOConfig, partition_trainer_kwargs  # noqa: E402
+from shared.config import GRPOConfig, partition_trainer_kwargs  # noqa: E402
 from train.data import format_grpo_dataset, limit_traces, load_prepared_splits  # noqa: E402
 
 RewardFunc = Callable[..., list[float | None]]
@@ -111,10 +111,16 @@ def run_grpo(
         print(
             f"[grpo] Using {config.dataset_fraction:g} of records from file"
         )
+    if not config.support_multi_tool_calls:
+        print(
+            "[grpo] support_multi_tool_calls=False: "
+            "parallel tool_calls will be split into sequential turns"
+        )
     splits = load_prepared_splits(
         config.dataset_path,
         dataset_fraction=config.dataset_fraction,
         temp_id=config.temp_id,
+        support_multi_tool_calls=config.support_multi_tool_calls,
     )
     print(
         "[grpo] Split sizes: "
@@ -141,12 +147,14 @@ def run_grpo(
         train_dataset,
         tokenizer,
         chat_template_kwargs=config.chat_template_kwargs,
+        support_multi_tool_calls=config.support_multi_tool_calls,
     )
     if eval_dataset is not None:
         eval_dataset = format_grpo_dataset(
             eval_dataset,
             tokenizer,
             chat_template_kwargs=config.chat_template_kwargs,
+            support_multi_tool_calls=config.support_multi_tool_calls,
         )
 
     rendered = [f"train={len(train_dataset)}", f"test={len(splits['test'])}"]

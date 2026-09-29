@@ -10,9 +10,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 
 DEFAULT_PORT = 8000
@@ -21,34 +22,34 @@ DEFAULT_MAX_MODEL_LEN = 16834
 _READY_TIMEOUT_S = 900
 
 
-def gemma4_bnb_hf_overrides(model_id: str) -> dict:
-    """Rewrite Unsloth skip-module names into the prefixes vLLM actually checks.
+def resolve_hf_overrides(
+    model_id: str,
+    *,
+    recipe_hf_overrides: dict[str, Any] | Callable[[str], dict[str, Any]] | None = None,
+    hf_overrides: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return explicit overrides, else resolve those declared on the recipe.
 
-    Unsloth lists mixed-precision layers as Hugging Face paths such as
-    ``model.language_model.layers.0.mlp``. vLLM looks up
-    ``language_model.model.layers.0.mlp``. Without the rewrite, bf16 weights
-    are loaded into packed 4-bit parameters and the server exits on startup.
-
-    Args:
-        model_id: Hugging Face id of the Unsloth bitsandbytes checkpoint.
-
-    Returns:
-        A dict suitable for vLLM ``--hf-overrides``.
+    Recipe overrides may be a static dict or a ``(model_id) -> dict`` builder
+    defined on the model config (see ``VLLMSpec.hf_overrides``).
     """
-    from huggingface_hub import hf_hub_download
+    if hf_overrides is not None:
+        return hf_overrides
+    if recipe_hf_overrides is None:
+        return None
+    if callable(recipe_hf_overrides):
+        return recipe_hf_overrides(model_id)
+    return recipe_hf_overrides
 
-    config_path = hf_hub_download(model_id, "config.json")
-    quantization = json.loads(Path(config_path).read_text(encoding="utf-8"))[
-        "quantization_config"
-    ]
-    prefix = "model.language_model."
-    quantization["llm_int8_skip_modules"] = [
-        "language_model.model." + name[len(prefix):]
-        if name.startswith(prefix)
-        else name
-        for name in quantization["llm_int8_skip_modules"]
-    ]
-    return {"quantization_config": quantization}
+
+def _try_load_recipe(model_id: str):
+    """Load a shared ModelRecipe when available; otherwise ``None``."""
+    try:
+        from shared.configs import load_model
+
+        return load_model(model_id)
+    except Exception:
+        return None
 
 
 @contextmanager
@@ -62,6 +63,7 @@ def vllm_server(
     hf_overrides: dict | None = None,
     gpu_memory_utilization: float = DEFAULT_GPU_MEMORY_UTILIZATION,
     max_model_len: int = DEFAULT_MAX_MODEL_LEN,
+    chat_template_kwargs: dict | None = None,
     log_path: str | Path = "outputs/vllm-serve.log",
 ) -> Iterator[str]:
     """Start ``vllm serve`` and yield its OpenAI base URL.
@@ -80,6 +82,7 @@ def vllm_server(
         hf_overrides: Optional JSON object for ``--hf-overrides``.
         gpu_memory_utilization: Fraction of GPU memory vLLM may reserve.
         max_model_len: Context length passed to vLLM.
+        chat_template_kwargs: Passed as ``--default-chat-template-kwargs``.
         log_path: File that receives the server stdout and stderr.
 
     Yields:
@@ -106,6 +109,7 @@ def vllm_server(
         hf_overrides=hf_overrides,
         gpu_memory_utilization=gpu_memory_utilization,
         max_model_len=max_model_len,
+        chat_template_kwargs=chat_template_kwargs or {"enable_thinking": False},
     )
     print(f"Starting vLLM on port {port}. Server log: {log_file.resolve()}")
     with log_file.open("w", encoding="utf-8") as log:
@@ -149,6 +153,7 @@ def _serve_command(
     hf_overrides: dict | None,
     gpu_memory_utilization: float,
     max_model_len: int,
+    chat_template_kwargs: dict,
 ) -> list[str]:
     vllm_bin = Path(sys.executable).with_name("vllm")
     command = [
@@ -163,7 +168,7 @@ def _serve_command(
         "--tool-call-parser",
         tool_call_parser,
         "--default-chat-template-kwargs",
-        json.dumps({"enable_thinking": False}),
+        json.dumps(chat_template_kwargs),
         "--gpu-memory-utilization",
         str(gpu_memory_utilization),
         "--max-model-len",
@@ -398,36 +403,88 @@ def run_served_benchmark(
     *,
     base_model: str,
     dataset_path: str,
-    tool_call_parser: str,
+    tool_call_parser: str | None = None,
     lora_name: str | None = None,
     lora_path: str | Path | None = None,
     hf_overrides: dict | None = None,
     max_traces: int | None = None,
+    support_multi_tool_calls: bool | None = None,
+    gpu_memory_utilization: float | None = None,
+    max_model_len: int | None = None,
 ) -> dict:
     """Start vLLM, replay ``dataset_path`` against it, then stop the server.
+
+    Serving knobs default from the matching ``shared.configs`` recipe when
+    present (``tool_call_parser``, ``hf_overrides``, max model length, …).
 
     Args:
         base_model: Hugging Face id passed to ``vllm serve``.
         dataset_path: JSONL trace file.
-        tool_call_parser: vLLM ``--tool-call-parser`` value.
+        tool_call_parser: vLLM ``--tool-call-parser`` value. ``None`` uses the
+            recipe when available.
         lora_name: Adapter name requested by the benchmark client.
         lora_path: LoRA checkpoint directory.
-        hf_overrides: Optional ``--hf-overrides`` object.
+        hf_overrides: Optional ``--hf-overrides`` object. When omitted, the
+            recipe ``VLLMSpec.hf_overrides`` is applied if set.
         max_traces: Limit the number of traces. ``None`` runs the full file.
+        support_multi_tool_calls: When False, parallel reference tool_calls are
+            split into sequential single-call turns. ``None`` resolves from the
+            matching recipe when available, else defaults to True.
+        gpu_memory_utilization: Optional override for vLLM memory fraction.
+        max_model_len: Optional override for vLLM context length.
 
     Returns:
         The benchmark report dict.
     """
-    from benchmark.config import InferenceProfile
+    from benchmark.config import InferenceProfile, resolve_support_multi_tool_calls
     from benchmark.runner import run_benchmark
 
+    recipe = _try_load_recipe(base_model)
+    parser = tool_call_parser
+    if parser is None:
+        if recipe is None:
+            raise ValueError(
+                "tool_call_parser is required when no shared recipe matches "
+                f"{base_model!r}."
+            )
+        parser = recipe.vllm.tool_call_parser
+
+    recipe_overrides = None if recipe is None else recipe.vllm.hf_overrides
+    overrides = resolve_hf_overrides(
+        base_model,
+        recipe_hf_overrides=recipe_overrides,
+        hf_overrides=hf_overrides,
+    )
+
+    mem = gpu_memory_utilization
+    if mem is None and recipe is not None and recipe.vllm.gpu_memory_utilization is not None:
+        mem = recipe.vllm.gpu_memory_utilization
+    if mem is None:
+        mem = DEFAULT_GPU_MEMORY_UTILIZATION
+
+    ctx = max_model_len
+    if ctx is None and recipe is not None and recipe.vllm.max_model_len is not None:
+        ctx = recipe.vllm.max_model_len
+    if ctx is None:
+        ctx = DEFAULT_MAX_MODEL_LEN
+
+    chat_kwargs = (
+        dict(recipe.chat.template_kwargs)
+        if recipe is not None and recipe.chat.template_kwargs
+        else {"enable_thinking": False}
+    )
+
+    multi = resolve_support_multi_tool_calls(base_model, support_multi_tool_calls)
     served_model = lora_name or base_model
     with vllm_server(
         base_model,
-        tool_call_parser=tool_call_parser,
+        tool_call_parser=parser,
         lora_name=lora_name,
         lora_path=lora_path,
-        hf_overrides=hf_overrides,
+        hf_overrides=overrides,
+        gpu_memory_utilization=mem,
+        max_model_len=ctx,
+        chat_template_kwargs=chat_kwargs,
     ) as base_url:
         profile = InferenceProfile(
             backend="vllm",
@@ -435,9 +492,10 @@ def run_served_benchmark(
             base_url=base_url,
             temperature=0.0,
             max_tokens=1024,
+            support_multi_tool_calls=multi,
             extra={
                 "extra_body": {
-                    "chat_template_kwargs": {"enable_thinking": False},
+                    "chat_template_kwargs": chat_kwargs,
                 },
             },
         )
