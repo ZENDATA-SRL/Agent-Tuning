@@ -56,16 +56,23 @@
             "request": "launch",
             "preLaunchTask": "uv sync benchmark",
             "python": "${workspaceFolder}/benchmark/.venv/bin/python",
-            "module": "benchmark",
+            "program": "${workspaceFolder}/scripts/benchmark_qwen3_sft.py",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",
             "cwd": "${workspaceFolder}",
-            "args": [
-                "--dataset", "data/umore/d9682064-3916-4915-99bd-cfab2c8d624d/eval.jsonl",
-                "--backend", "vllm",
-                "--model", "qwen-umore",
-                "--base-url", "http://localhost:8000/v1"
-            ]
+            "justMyCode": false
+        },
+        {
+            "name": "Benchmark: vLLM gemma4-e2b-finetuned",
+            "type": "debugpy",
+            "request": "launch",
+            "preLaunchTask": "uv sync benchmark",
+            "python": "${workspaceFolder}/benchmark/.venv/bin/python",
+            "program": "${workspaceFolder}/scripts/benchmark_gemma4_sft.py",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false
         },
         {
             "name": "Benchmark: vLLM gemma4-e2b-no-lora",
@@ -73,16 +80,11 @@
             "request": "launch",
             "preLaunchTask": "uv sync benchmark",
             "python": "${workspaceFolder}/benchmark/.venv/bin/python",
-            "module": "benchmark",
+            "program": "${workspaceFolder}/scripts/benchmark_gemma4_base.py",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",
             "cwd": "${workspaceFolder}",
-            "args": [
-                "--dataset", "data/umore/ecf97df8-8b35-4bad-915d-2a9a8665fac6/eval.jsonl",
-                "--backend", "vllm",
-                "--model", "unsloth/gemma-4-E2B-it-unsloth-bnb-4bit",
-                "--base-url", "http://localhost:8000/v1"
-            ]
+            "justMyCode": false
         },
         {
             "name": "Benchmark: vLLM Qwen3-8B-no-lora",
@@ -90,16 +92,11 @@
             "request": "launch",
             "preLaunchTask": "uv sync benchmark",
             "python": "${workspaceFolder}/benchmark/.venv/bin/python",
-            "module": "benchmark",
+            "program": "${workspaceFolder}/scripts/benchmark_qwen3_base.py",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",
             "cwd": "${workspaceFolder}",
-            "args": [
-                "--dataset", "data/umore_july_dataset/test_only_tool_call.jsonl",
-                "--backend", "vllm",
-                "--model", "unsloth/Qwen3-8B-unsloth-bnb-4bit",
-                "--base-url", "http://localhost:8000/v1"
-            ]
+            "justMyCode": false
         },
         {
             "name": "Benchmark: bedrock Sonnet 4.6 - umore (20 traces)",

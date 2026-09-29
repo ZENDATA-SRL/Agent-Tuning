@@ -59,32 +59,64 @@ def _extract_reference_final_answer(trace: dict, messages: list[dict]) -> str:
     return ""
 
 
+def _format_action(text: str, tool_calls: list) -> str:
+    """Render one assistant action as indented text and tool arguments."""
+    lines: list[str] = []
+    body = (text or "").strip()
+    if body:
+        lines.extend(f"  {line}" for line in body.splitlines())
+    for call in tool_calls:
+        lines.append(f"  {call.name}")
+        if not call.args:
+            lines.append("    (no arguments)")
+            continue
+        width = max(len(str(key)) for key in call.args)
+        for key in sorted(call.args):
+            value = call.args[key]
+            if not isinstance(value, str):
+                value = json.dumps(value, ensure_ascii=False)
+            lines.append(f"    {key:<{width}}  {value}")
+    return "\n".join(lines) if lines else "  (empty)"
+
+
+def _step_name(turn, tool_index: int, tool_total: int) -> str:
+    """Name a scored step by what the benchmark asked the model to produce."""
+    if turn.reference_tool_calls and turn.is_final:
+        return "final tool call"
+    if turn.reference_tool_calls:
+        if tool_total > 1:
+            return f"tool call {tool_index}/{tool_total}"
+        return "tool call"
+    return "reply"
+
+
 def _print_replay(trace_index: int, total_traces: int, replay_result: TraceReplayResult) -> None:
-    """Print prompts and model outputs for an interactive benchmark run."""
-    print(f"\n{'=' * 80}")
-    print(f"TRACE {trace_index + 1}/{total_traces}: {replay_result.trace_id}")
+    """Print the reference action and the model action for each scored step."""
+    blocks: list[str] = []
+    trace_label = f"trace {trace_index + 1}/{total_traces}"
     if replay_result.error:
-        print(f"REPLAY ERROR: {replay_result.error}")
+        blocks.append(f"{trace_label}  error: {replay_result.error}")
 
+    tool_total = sum(1 for turn in replay_result.turns if turn.reference_tool_calls)
+    tool_index = 0
     for turn in replay_result.turns:
-        print(f"\n--- generated turn {turn.turn_index}"
-              f"{' (final answer)' if turn.is_final else ' (tool call)'} ---")
-        print("PROMPT:")
-        print(json.dumps(turn.prompt_messages, ensure_ascii=False, indent=2))
-        print("RESULT:")
-        print(json.dumps({
-            "text": turn.generated.text,
-            "tool_calls": [
-                {"name": call.name, "args": call.args, "id": call.call_id}
-                for call in turn.generated.tool_calls
-            ],
-            "input_tokens": turn.generated.input_tokens,
-            "output_tokens": turn.generated.output_tokens,
-            "latency_ms": turn.generated.total_latency_ms,
-        }, ensure_ascii=False, indent=2))
+        if turn.reference_tool_calls:
+            tool_index += 1
+        header = f"{trace_label}  ·  {_step_name(turn, tool_index, tool_total)}"
+        rule = "─" * len(header)
+        blocks.append("\n".join([
+            rule,
+            header,
+            rule,
+            "expected",
+            _format_action(turn.reference_text, turn.reference_tool_calls),
+            "",
+            "predicted",
+            _format_action(turn.generated.text, turn.generated.tool_calls),
+        ]))
 
-    if not replay_result.turns and not replay_result.error:
-        print("No generated turns.")
+    if blocks:
+        tqdm.write("\n\n".join(blocks))
 
 
 def run_benchmark(

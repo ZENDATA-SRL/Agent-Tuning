@@ -24,7 +24,8 @@ def main() -> None:
         train_on_tool_calls_only=True,
         dataset_fraction=1.00, # use only 50% of the dataset to speed up training
         #lora_dropout=0.05,
-
+        save_steps=20,
+        eval_steps=20,
         # Override default params of the model
         # learning_rate=1e-4,
         # report_to="none", # if you want to disable reporting to wandb

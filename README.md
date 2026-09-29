@@ -10,7 +10,7 @@ The repository contains two independent Python environments:
 It also includes a small FastAPI playground for trying saved adapters.
 
 > [!WARNING]
-> Training requires a CUDA-capable GPU. The benchmark package is a client: start vLLM or Ollama separately when using a local model.
+> Training requires a CUDA-capable GPU. The vLLM benchmark scripts start the server themselves. Ollama and hosted backends still need a server that is already running.
 
 ## Repository layout
 
@@ -92,7 +92,18 @@ Supported backends:
 - `azure`: Azure OpenAI.
 - `bedrock`: AWS Bedrock Converse.
 
-Example against a local vLLM server:
+The vLLM scripts stop other GPU processes, start the server, replay the dataset, then stop the server. Edit the dataset and checkpoint constants at the top of the script before launching it.
+
+```bash
+uv run --project benchmark python scripts/benchmark_gemma4_sft.py
+uv run --project benchmark python scripts/benchmark_gemma4_base.py
+uv run --project benchmark python scripts/benchmark_qwen3_sft.py
+uv run --project benchmark python scripts/benchmark_qwen3_base.py
+```
+
+Each scored turn prints only the reference action and the model action. The JSON report is still written next to the dataset.
+
+To point an already running server at the client:
 
 ```bash
 uv run --project benchmark python -m benchmark \

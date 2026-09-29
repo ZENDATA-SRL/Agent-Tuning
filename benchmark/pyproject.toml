@@ -8,6 +8,7 @@ dependencies = [
     "langchain-aws>=1.3.0",
     "langchain-ollama>=1.1.0",
     "langchain-openai>=1.6.6",
+    "ninja>=1.13.2",
     "python-dotenv>=1.2.3",
     "tqdm>=4.70.1",
     "transformers==5.14.1",
