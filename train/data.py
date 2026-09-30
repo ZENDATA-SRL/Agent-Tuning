@@ -205,6 +205,76 @@ def filter_tool_call_traces(dataset: Dataset) -> Dataset:
     return dataset.select(keep)
 
 
+def mix_tool_trace_fraction(
+    dataset: Dataset,
+    tool_trace_fraction: float,
+    *,
+    seed: int,
+) -> Dataset:
+    """Resample so tool-ending traces are ``tool_trace_fraction`` of the result.
+
+    ``tool_trace_fraction`` must be in ``[0.0, 1.0]``:
+    - ``1.0`` → only traces ending in an assistant tool call
+    - ``0.0`` → only traces ending in a text assistant turn
+    - in between → largest subset with that tool / non-tool ratio
+
+    Sampling is seeded. The returned row order is shuffled.
+    """
+    if not 0.0 <= tool_trace_fraction <= 1.0:
+        raise ValueError(
+            "tool_trace_fraction deve essere in [0.0, 1.0], "
+            f"ricevuto {tool_trace_fraction}."
+        )
+
+    tool_idx: list[int] = []
+    non_tool_idx: list[int] = []
+    for index, row in enumerate(dataset):
+        if _ends_with_tool_call(dict(row)):
+            tool_idx.append(index)
+        else:
+            non_tool_idx.append(index)
+
+    rng = random.Random(seed)
+    rng.shuffle(tool_idx)
+    rng.shuffle(non_tool_idx)
+
+    n_tool_avail = len(tool_idx)
+    n_non_avail = len(non_tool_idx)
+
+    if tool_trace_fraction >= 1.0:
+        keep = tool_idx
+    elif tool_trace_fraction <= 0.0:
+        keep = non_tool_idx
+    else:
+        # Largest T with floor(f*T) tools and T - that many non-tools available.
+        max_total = min(
+            int(n_tool_avail / tool_trace_fraction),
+            int(n_non_avail / (1.0 - tool_trace_fraction)),
+        )
+        if max_total < 1:
+            raise ValueError(
+                "Impossibile raggiungere tool_trace_fraction="
+                f"{tool_trace_fraction:g}: disponibili "
+                f"{n_tool_avail} tool e {n_non_avail} non-tool."
+            )
+        n_tool = int(round(tool_trace_fraction * max_total))
+        n_tool = min(max(n_tool, 0), n_tool_avail, max_total)
+        n_non = min(max_total - n_tool, n_non_avail)
+        # Prefer hitting the ratio over leaving one side empty when both exist.
+        if n_tool == 0 and n_tool_avail > 0 and tool_trace_fraction > 0:
+            n_tool = 1
+            n_non = min(max_total - 1, n_non_avail)
+        if n_non == 0 and n_non_avail > 0 and tool_trace_fraction < 1:
+            n_non = 1
+            n_tool = min(max_total - 1, n_tool_avail)
+        keep = tool_idx[:n_tool] + non_tool_idx[:n_non]
+        rng.shuffle(keep)
+
+    if not keep:
+        return dataset.select([])
+    return dataset.select(keep)
+
+
 # Langchain-style traces use "human"/"ai", OpenAI uses "user"/"assistant".
 # Normalise to OpenAI canonical so `apply_chat_template` understands them.
 _ROLE_MAPPING = {
@@ -341,17 +411,44 @@ def _last_assistant_index(messages: list[dict]) -> int:
     )
 
 
-def _reference_tool_names(assistant_msg: dict) -> list[str]:
+def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
+    """Normalise OpenAI-style tool arguments to a dict."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return {}
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _reference_tool_calls(assistant_msg: dict) -> list[dict[str, Any]]:
+    """Return ``[{name, arguments}, ...]`` from the last assistant turn."""
     tool_calls = assistant_msg.get("tool_calls") or []
-    names: list[str] = []
+    parsed: list[dict[str, Any]] = []
     for tc in tool_calls:
         if not isinstance(tc, dict):
             continue
         fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
-        name = fn.get("name") if isinstance(fn, dict) else None
-        if name:
-            names.append(str(name))
-    return names
+        if not isinstance(fn, dict):
+            continue
+        name = fn.get("name")
+        if not name:
+            continue
+        parsed.append(
+            {
+                "name": str(name),
+                "arguments": _parse_tool_arguments(fn.get("arguments")),
+            }
+        )
+    return parsed
 
 
 def format_grpo_dataset(
@@ -367,6 +464,9 @@ def format_grpo_dataset(
     turn, rendered with the chat template (tools included) and a generation
     prompt so the model continues as assistant. Reference fields are kept for
     reward functions (TRL forwards every column except `prompt`).
+
+    ``reference_tool_arguments`` is stored as a JSON string per row so Arrow
+    does not need a uniform nested schema across heterogeneous tool APIs.
     """
     if len(records) == 0:
         raise ValueError("format_grpo_dataset received an empty dataset.")
@@ -374,6 +474,7 @@ def format_grpo_dataset(
     prompts: list[str] = []
     reference_contents: list[str] = []
     reference_tool_names: list[list[str]] = []
+    reference_tool_arguments: list[str] = []
     reference_has_tool_calls: list[bool] = []
 
     for rec in records:
@@ -395,10 +496,13 @@ def format_grpo_dataset(
             add_generation_prompt=True,
             chat_template_kwargs=chat_template_kwargs,
         )
-        tool_names = _reference_tool_names(reference)
+        ref_calls = _reference_tool_calls(reference)
+        tool_names = [call["name"] for call in ref_calls]
+        tool_args = [call["arguments"] for call in ref_calls]
         prompts.append(prompt)
         reference_contents.append(reference.get("content") or "")
         reference_tool_names.append(tool_names)
+        reference_tool_arguments.append(json.dumps(tool_args, ensure_ascii=False))
         reference_has_tool_calls.append(bool(tool_names))
 
     return Dataset.from_dict(
@@ -406,6 +510,7 @@ def format_grpo_dataset(
             "prompt": prompts,
             "reference_content": reference_contents,
             "reference_tool_names": reference_tool_names,
+            "reference_tool_arguments": reference_tool_arguments,
             "reference_has_tool_calls": reference_has_tool_calls,
         }
     )

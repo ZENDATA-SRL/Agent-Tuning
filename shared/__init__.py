@@ -4,6 +4,8 @@ from shared.config import (
     BASE_GRPO,
     BASE_SFT,
     ChatTemplateSpec,
+    DecodingSetup,
+    GenerationOverride,
     GenerationSpec,
     GRPOConfig,
     GRPOHyperparams,
@@ -11,6 +13,7 @@ from shared.config import (
     ModelRecipe,
     SFTConfig,
     SFTHyperparams,
+    ToolCallFormat,
     VLLMSpec,
 )
 from shared.configs import available_models, load_model
@@ -19,6 +22,8 @@ __all__ = [
     "BASE_GRPO",
     "BASE_SFT",
     "ChatTemplateSpec",
+    "DecodingSetup",
+    "GenerationOverride",
     "GenerationSpec",
     "GRPOConfig",
     "GRPOHyperparams",
@@ -26,6 +31,7 @@ __all__ = [
     "ModelRecipe",
     "SFTConfig",
     "SFTHyperparams",
+    "ToolCallFormat",
     "VLLMSpec",
     "available_models",
     "load_model",

@@ -7,6 +7,7 @@ from `.env`) are applied before the first download.
 from __future__ import annotations
 
 import os
+import warnings
 
 _EMPTY_WANDB_KEYS = (
     "WANDB_TAGS",
@@ -18,7 +19,7 @@ _EMPTY_WANDB_KEYS = (
 
 
 def configure_env() -> None:
-    """Set training environment variables."""
+    """Set training environment variables and silence known third-party noise."""
 
     # Enable high-performance downloads through Xet.
     os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
@@ -29,3 +30,11 @@ def configure_env() -> None:
     for key in _EMPTY_WANDB_KEYS:
         if os.environ.get(key, "").strip() == "":
             os.environ.pop(key, None)
+
+    # Unsloth probes torch.has_cuda / has_cudnn / … via torch.__getattr__,
+    # which emits these deprecations on newer torch builds.
+    warnings.filterwarnings(
+        "ignore",
+        message=r"'has_(cuda|cudnn|mps|mkldnn)' is deprecated",
+        category=UserWarning,
+    )

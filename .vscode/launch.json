@@ -15,12 +15,12 @@
             "justMyCode": false
         },
         {
-            "name": "Train: Qwen3-8B GRPO",
+            "name": "Train: GRPO",
             "type": "debugpy",
             "request": "launch",
             "preLaunchTask": "uv sync unsloth-training",
             "python": "${workspaceFolder}/train/.venv/bin/python",
-            "program": "${workspaceFolder}/scripts/train_qwen3_grpo.py",
+            "program": "${workspaceFolder}/scripts/train_grpo.py",
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env",
             "cwd": "${workspaceFolder}",

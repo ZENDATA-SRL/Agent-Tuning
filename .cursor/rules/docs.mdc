@@ -18,3 +18,4 @@ alwaysApply: true
 - Require JSDoc for JavaScript/TypeScript functions and Google-style docstrings for Python.
 - Explain *why* a complex logic choice was made, not just *what* the code does.
 - Keep code examples inside documentation up to date with the latest API changes.
+- Keep code comments shorts, max 3 lines.

@@ -411,6 +411,7 @@ def run_served_benchmark(
     support_multi_tool_calls: bool | None = None,
     gpu_memory_utilization: float | None = None,
     max_model_len: int | None = None,
+    decoding_mode: str = "no_thinking",
 ) -> dict:
     """Start vLLM, replay ``dataset_path`` against it, then stop the server.
 
@@ -432,6 +433,8 @@ def run_served_benchmark(
             matching recipe when available, else defaults to True.
         gpu_memory_utilization: Optional override for vLLM memory fraction.
         max_model_len: Optional override for vLLM context length.
+        decoding_mode: ``"thinking"`` or ``"no_thinking"``. Selects the recipe's
+            chat-template kwargs. Unknown modes raise ``KeyError``.
 
     Returns:
         The benchmark report dict.
@@ -468,11 +471,11 @@ def run_served_benchmark(
     if ctx is None:
         ctx = DEFAULT_MAX_MODEL_LEN
 
-    chat_kwargs = (
-        dict(recipe.chat.template_kwargs)
-        if recipe is not None and recipe.chat.template_kwargs
-        else {"enable_thinking": False}
-    )
+    chat_kwargs = {"enable_thinking": False}
+    if recipe is not None:
+        template_kwargs = recipe.decoding_setup(decoding_mode).template_kwargs
+        if template_kwargs:
+            chat_kwargs = dict(template_kwargs)
 
     multi = resolve_support_multi_tool_calls(base_model, support_multi_tool_calls)
     served_model = lora_name or base_model

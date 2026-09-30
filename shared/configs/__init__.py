@@ -5,12 +5,13 @@ import importlib
 from functools import lru_cache
 from pathlib import Path
 
-from shared.config import GRPOConfig, ModelRecipe, SFTConfig
+from shared.config import GRPOConfig, ModelRecipe, SFTConfig, ToolCallFormat
 
 __all__ = [
     "GRPOConfig",
     "ModelRecipe",
     "SFTConfig",
+    "ToolCallFormat",
     "available_models",
     "load_model",
 ]

@@ -7,9 +7,24 @@ from __future__ import annotations
 
 import inspect
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from collections.abc import Callable, Mapping
 from typing import Any, Literal
+
+
+def _sampling_fields(
+    setup: DecodingSetup, spec: GenerationSpec
+) -> dict[str, Any]:
+    """Flat sampling columns shared by ``SFTConfig`` and ``GRPOConfig``."""
+    return {
+        "generation_do_sample": spec.do_sample,
+        "generation_temperature": spec.temperature,
+        "generation_top_p": spec.top_p,
+        "generation_top_k": spec.top_k,
+        "generation_min_p": spec.min_p,
+        "generation_prompt_suffix": setup.generation_prompt_suffix,
+        "chat_template_kwargs": dict(setup.template_kwargs),
+    }
 
 
 def _resolve_run(output_dir: str, run_id: str | None) -> tuple[str, str]:
@@ -20,6 +35,9 @@ def _resolve_run(output_dir: str, run_id: str | None) -> tuple[str, str]:
 
 
 LossMasking = Literal["unsloth_responses_only", "assistant_turns"]
+
+# Sentinel so ``tool_trace_fraction=None`` means "natural mix", not "use recipe default".
+_UNSET: Any = object()
 
 
 @dataclass(frozen=True)
@@ -32,7 +50,7 @@ class LoRASpec:
 
 @dataclass(frozen=True)
 class GenerationSpec:
-    """Sampling used whenever the model generates (eval callback, GRPO rollouts)."""
+    """Sampling numbers for one decoding mode (thinking or not)."""
 
     do_sample: bool
     temperature: float
@@ -41,22 +59,83 @@ class GenerationSpec:
     min_p: float
 
 
+DecodingMode = Literal["thinking", "no_thinking"]
+
+
+@dataclass(frozen=True)
+class GenerationOverride:
+    """Fields replaced on top of a mode's ``GenerationSpec``.
+
+    ``None`` keeps the mode value. GRPO uses this to widen rollouts without
+    copying the official sampler.
+    """
+
+    do_sample: bool | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
+
+
+def apply_generation_override(
+    spec: GenerationSpec,
+    override: GenerationOverride | None,
+) -> GenerationSpec:
+    """Return ``spec`` with the non-null fields of ``override`` applied."""
+    if override is None:
+        return spec
+    updates = {
+        key: value
+        for key, value in asdict(override).items()
+        if value is not None
+    }
+    if not updates:
+        return spec
+    return replace(spec, **updates)
+
+
+@dataclass(frozen=True)
+class DecodingSetup:
+    """Sampler plus the prompt pieces that change with thinking mode.
+
+    Suffix and template kwargs travel with the sampler so a thinking run
+    cannot mix Qwen's non-thinking numbers with the wrong ``<think>`` block.
+    """
+
+    generation: GenerationSpec
+    generation_prompt_suffix: str
+    template_kwargs: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ToolCallFormat:
+    """How a chat template serialises tool calls in generated text.
+
+    Owned by each model recipe so training rewards stay format-agnostic.
+    ``parse`` returns ``[{name, arguments}, ...]``; ``has_markup`` is true
+    when the text looks like a tool-call attempt (even if not parseable).
+    """
+
+    parse: Callable[[str], list[dict[str, Any]]]
+    has_markup: Callable[[str], bool]
+
+
 @dataclass(frozen=True)
 class ChatTemplateSpec:
-    """Markers and tokenizer kwargs that depend on the chat template, not the method."""
+    """Markers that depend on the chat template, not on thinking mode or method.
+
+    The generation suffix and ``enable_thinking`` live on ``DecodingSetup``.
+    """
 
     instruction_part: str
     response_part: str
     turn_end_marker: str
     forbidden_in_loss: tuple[str, ...]
-    # Suffisso appeso al prompt di eval per forzare il formato di generazione
-    # (ruolo assistant, thinking disattivato, ecc.).
-    generation_prompt_suffix: str
     # False → parallel tool calls are split into sequential single-call turns
     # before rendering (required by templates like Llama 3.1).
     support_multi_tool_calls: bool
-    # Kwargs inoltrati a `tokenizer.apply_chat_template` (es. enable_thinking).
-    template_kwargs: Mapping[str, Any] = field(default_factory=dict)
+    # How this template encodes tool calls in assistant text (GRPO rewards).
+    tool_calls: ToolCallFormat
 
 
 @dataclass(frozen=True)
@@ -96,9 +175,9 @@ class SFTHyperparams:
     # "assistant_turns": maschera custom su ogni turno assistant.
     loss_masking: LossMasking
     last_response_only: bool
-    # Se True, tieni solo le tracce il cui ultimo messaggio è un assistant
-    # con almeno una tool call.
-    train_on_tool_calls_only: bool
+    # Fraction of training traces that must end in a tool call, in [0.0, 1.0].
+    # None → keep the natural mix. 1.0 → tool-only; 0.0 → text-only.
+    tool_trace_fraction: float | None
 
 
 @dataclass(frozen=True)
@@ -124,6 +203,11 @@ class GRPOHyperparams:
     save_steps: int
     mixed_precision: str
     gradient_checkpointing: str | bool
+    # Fraction of training traces that must end in a tool call, in [0.0, 1.0].
+    # None → keep the natural mix. 1.0 → tool-only; 0.0 → text-only.
+    tool_trace_fraction: float | None
+    # None → rollouts use the decoding mode's GenerationSpec unchanged.
+    generation_override: GenerationOverride | None = None
 
 
 # Default method blocks. Recipes may ``replace()`` individual fields.
@@ -145,16 +229,16 @@ BASE_SFT = SFTHyperparams(
     gradient_checkpointing="unsloth",
     loss_masking="unsloth_responses_only",
     last_response_only=True,
-    train_on_tool_calls_only=False,
+    tool_trace_fraction=None,
 )
 
 BASE_GRPO = GRPOHyperparams(
     learning_rate=5e-6,
     num_train_epochs=1.0,
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=4,
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=2,
     num_generations=4,
-    max_completion_length=16384,
+    max_completion_length=1024,
     beta=0.04,
     warmup_ratio=0.03,
     weight_decay=0.01,
@@ -166,6 +250,7 @@ BASE_GRPO = GRPOHyperparams(
     save_steps=40,
     mixed_precision="bf16",
     gradient_checkpointing="unsloth",
+    tool_trace_fraction=None,
 )
 
 
@@ -178,11 +263,44 @@ class ModelRecipe:
     max_seq_length: int
     load_in_4bit: bool
     lora: LoRASpec
-    generation: GenerationSpec
+    # Keyed by thinking mode. Each model declares only the modes it supports.
+    decoding: Mapping[DecodingMode, DecodingSetup]
     chat: ChatTemplateSpec
     vllm: VLLMSpec
     sft_defaults: SFTHyperparams = BASE_SFT
     grpo_defaults: GRPOHyperparams = BASE_GRPO
+
+    def decoding_setup(self, mode: DecodingMode) -> DecodingSetup:
+        """Return the mode bundle. Raises ``KeyError`` if the recipe lacks ``mode``."""
+        try:
+            return self.decoding[mode]
+        except KeyError:
+            known = ", ".join(sorted(self.decoding)) or "(nessuna)"
+            raise KeyError(
+                f"Modalità {mode!r} assente per {self.id}. Disponibili: {known}."
+            ) from None
+
+    def resolve_generation(
+        self,
+        method: Literal["sft", "grpo"],
+        mode: DecodingMode,
+    ) -> GenerationSpec:
+        """Sampling for ``method`` in ``mode``.
+
+        SFT uses the mode profile. GRPO applies
+        ``grpo_defaults.generation_override`` on top and leaves unspecified
+        fields at the mode values.
+        """
+        spec = self.decoding_setup(mode).generation
+        if method == "sft":
+            return spec
+        if method == "grpo":
+            return apply_generation_override(
+                spec, self.grpo_defaults.generation_override
+            )
+        raise ValueError(
+            f"Metodo sconosciuto {method!r}. Disponibili: 'sft', 'grpo'."
+        )
 
     def sft(
         self,
@@ -193,16 +311,26 @@ class ModelRecipe:
         shuffle: bool = False,
         max_traces: int | None = None,
         dataset_fraction: float = 1.0,
+        tool_trace_fraction: float | None | Any = _UNSET,
+        decoding_mode: DecodingMode = "no_thinking",
         run_id: str | None = None,
         **overrides: Any,
     ) -> SFTConfig:
         """Build the flat config consumed by `run_sft`.
 
-        `overrides` replace recipe defaults (learning rate, LoRA rank, …)
-        for a single run. Names that are not fields of `SFTConfig` are
-        stored in `trainer_kwargs` and forwarded to the trainer.
+        `decoding_mode` selects the recipe's ``DecodingSetup``. SFT uses
+        that sampler as-is. `overrides` replace recipe defaults (learning
+        rate, LoRA rank, …) for a single run. Names that are not fields of
+        `SFTConfig` are stored in `trainer_kwargs` and forwarded to the trainer.
         """
         run_id, output_dir = _resolve_run(output_dir, run_id)
+        fraction = (
+            self.sft_defaults.tool_trace_fraction
+            if tool_trace_fraction is _UNSET
+            else tool_trace_fraction
+        )
+        setup = self.decoding_setup(decoding_mode)
+        spec = self.resolve_generation("sft", decoding_mode)
         params: dict[str, Any] = dict(
             dataset_path=dataset_path,
             output_dir=output_dir,
@@ -210,6 +338,7 @@ class ModelRecipe:
             shuffle=shuffle,
             max_traces=max_traces,
             dataset_fraction=dataset_fraction,
+            tool_trace_fraction=fraction,
             temp_id=run_id,
             model_name=self.model_name,
             max_seq_length=self.max_seq_length,
@@ -235,19 +364,12 @@ class ModelRecipe:
             gradient_checkpointing=self.sft_defaults.gradient_checkpointing,
             loss_masking=self.sft_defaults.loss_masking,
             last_response_only=self.sft_defaults.last_response_only,
-            train_on_tool_calls_only=self.sft_defaults.train_on_tool_calls_only,
-            generation_do_sample=self.generation.do_sample,
-            generation_temperature=self.generation.temperature,
-            generation_top_p=self.generation.top_p,
-            generation_top_k=self.generation.top_k,
-            generation_min_p=self.generation.min_p,
-            generation_prompt_suffix=self.chat.generation_prompt_suffix,
+            **_sampling_fields(setup, spec),
             instruction_part=self.chat.instruction_part,
             response_part=self.chat.response_part,
             turn_end_marker=self.chat.turn_end_marker,
             forbidden_in_loss=self.chat.forbidden_in_loss,
             support_multi_tool_calls=self.chat.support_multi_tool_calls,
-            chat_template_kwargs=dict(self.chat.template_kwargs),
         )
         params["trainer_kwargs"] = _collect_trainer_kwargs(params, overrides)
         return SFTConfig(**params)
@@ -262,7 +384,9 @@ class ModelRecipe:
         shuffle: bool = False,
         max_traces: int | None = None,
         dataset_fraction: float = 1.0,
+        tool_trace_fraction: float | None | Any = _UNSET,
         reward_weights: list[float] | None = None,
+        decoding_mode: DecodingMode = "no_thinking",
         run_id: str | None = None,
         **overrides: Any,
     ) -> GRPOConfig:
@@ -270,11 +394,20 @@ class ModelRecipe:
 
         `lora_adapter_path` points at a saved LoRA directory (e.g. an SFT
         `best_eval_model`) to continue from. `None` attaches a fresh LoRA.
-        Reward callables are passed separately to `run_grpo`.
+        `decoding_mode` selects the recipe's ``DecodingSetup``; GRPO then
+        applies ``generation_override`` on top. Reward callables are passed
+        separately to `run_grpo`.
         Names that are not fields of `GRPOConfig` are stored in
         `trainer_kwargs` and forwarded to the trainer.
         """
         run_id, output_dir = _resolve_run(output_dir, run_id)
+        fraction = (
+            self.grpo_defaults.tool_trace_fraction
+            if tool_trace_fraction is _UNSET
+            else tool_trace_fraction
+        )
+        setup = self.decoding_setup(decoding_mode)
+        spec = self.resolve_generation("grpo", decoding_mode)
         params: dict[str, Any] = dict(
             dataset_path=dataset_path,
             output_dir=output_dir,
@@ -283,6 +416,7 @@ class ModelRecipe:
             shuffle=shuffle,
             max_traces=max_traces,
             dataset_fraction=dataset_fraction,
+            tool_trace_fraction=fraction,
             reward_weights=reward_weights,
             temp_id=run_id,
             model_name=self.model_name,
@@ -309,18 +443,12 @@ class ModelRecipe:
             save_steps=self.grpo_defaults.save_steps,
             mixed_precision=self.grpo_defaults.mixed_precision,
             gradient_checkpointing=self.grpo_defaults.gradient_checkpointing,
-            generation_do_sample=self.generation.do_sample,
-            generation_temperature=self.generation.temperature,
-            generation_top_p=self.generation.top_p,
-            generation_top_k=self.generation.top_k,
-            generation_min_p=self.generation.min_p,
-            generation_prompt_suffix=self.chat.generation_prompt_suffix,
+            **_sampling_fields(setup, spec),
             instruction_part=self.chat.instruction_part,
             response_part=self.chat.response_part,
             turn_end_marker=self.chat.turn_end_marker,
             forbidden_in_loss=self.chat.forbidden_in_loss,
             support_multi_tool_calls=self.chat.support_multi_tool_calls,
-            chat_template_kwargs=dict(self.chat.template_kwargs),
         )
         params["trainer_kwargs"] = _collect_trainer_kwargs(params, overrides)
         return GRPOConfig(**params)
@@ -335,11 +463,16 @@ class ModelRecipe:
         shuffle: bool = False,
         max_traces: int | None = None,
         dataset_fraction: float = 1.0,
+        tool_trace_fraction: float | None | Any = _UNSET,
+        decoding_mode: DecodingMode = "no_thinking",
         temp_id: str | None = None,
         **overrides: Any,
     ) -> SFTConfig | GRPOConfig:
         if dataset_path is None:
             raise TypeError(f"build(method={method!r}) richiede dataset_path.")
+        fraction_kw: dict[str, Any] = {}
+        if tool_trace_fraction is not _UNSET:
+            fraction_kw["tool_trace_fraction"] = tool_trace_fraction
         if method == "sft":
             return self.sft(
                 dataset_path=dataset_path,
@@ -348,7 +481,9 @@ class ModelRecipe:
                 shuffle=shuffle,
                 max_traces=max_traces,
                 dataset_fraction=dataset_fraction,
+                decoding_mode=decoding_mode,
                 run_id=temp_id,
+                **fraction_kw,
                 **overrides,
             )
         if method == "grpo":
@@ -359,7 +494,9 @@ class ModelRecipe:
                 shuffle=shuffle,
                 max_traces=max_traces,
                 dataset_fraction=dataset_fraction,
+                decoding_mode=decoding_mode,
                 run_id=temp_id,
+                **fraction_kw,
                 **overrides,
             )
         raise ValueError(
@@ -438,6 +575,8 @@ class SFTConfig:
     max_traces: int | None
     # Fraction of records in dataset_path used before train/eval/test split (1.0 = all).
     dataset_fraction: float
+    # Target share of tool-ending traces in [0.0, 1.0], or None for natural mix.
+    tool_trace_fraction: float | None
     # Folder name, next to dataset_path, for the train/test/eval JSONL files.
     temp_id: str | None
 
@@ -470,9 +609,6 @@ class SFTConfig:
     gradient_checkpointing: str | bool
     loss_masking: LossMasking
     last_response_only: bool
-    # Se True, tieni solo le tracce il cui ultimo messaggio è un assistant
-    # con almeno una tool call.
-    train_on_tool_calls_only: bool
 
     # Sampling
     generation_do_sample: bool
@@ -511,6 +647,8 @@ class GRPOConfig:
     # Cap the train split after shuffle. None loads every trace.
     max_traces: int | None
     dataset_fraction: float
+    # Target share of tool-ending traces in [0.0, 1.0], or None for natural mix.
+    tool_trace_fraction: float | None
     # Folder name, next to dataset_path, for the train/test/eval JSONL files.
     temp_id: str | None
     reward_weights: list[float] | None

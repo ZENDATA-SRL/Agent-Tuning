@@ -7,11 +7,13 @@ from shared.config import (
     BASE_GRPO,
     BASE_SFT,
     ChatTemplateSpec,
+    DecodingSetup,
     GenerationSpec,
     LoRASpec,
     ModelRecipe,
     VLLMSpec,
 )
+from shared.configs.llama.tool_calls import LLAMA3_JSON_TOOL_CALLS
 
 
 RECIPE = ModelRecipe(
@@ -37,13 +39,21 @@ RECIPE = ModelRecipe(
     ),
     # generation_config del checkpoint: temperature 0.6, top_p 0.9.
     # top_k non è nel file, quindi resta il default di transformers.
-    generation=GenerationSpec(
-        do_sample=True,
-        temperature=0.6,
-        top_p=0.9,
-        top_k=50,
-        min_p=0.0,
-    ),
+    # Nessun canale di thinking.
+    decoding={
+        "no_thinking": DecodingSetup(
+            generation=GenerationSpec(
+                do_sample=True,
+                temperature=0.6,
+                top_p=0.9,
+                top_k=50,
+                min_p=0.0,
+            ),
+            generation_prompt_suffix=(
+                "<|start_header_id|>assistant<|end_header_id|>\n\n"
+            ),
+        ),
+    },
     chat=ChatTemplateSpec(
         # Header Llama 3.2, due newline inclusi: Unsloth li cerca verbatim.
         instruction_part="<|start_header_id|>user<|end_header_id|>\n\n",
@@ -56,12 +66,9 @@ RECIPE = ModelRecipe(
             # I risultati dei tool sono un turno `ipython` (accetta anche role tool).
             "<|start_header_id|>ipython",
         ),
-        # Nessun canale di thinking: il prompt di generazione è solo l'header assistant.
-        generation_prompt_suffix="<|start_header_id|>assistant<|end_header_id|>\n\n",
         # Jinja: "This model only supports single tool-calls at once!".
         support_multi_tool_calls=False,
-        # Default del template: tools_in_user_message=true, date via strftime_now.
-        template_kwargs={},
+        tool_calls=LLAMA3_JSON_TOOL_CALLS,
     ),
     vllm=VLLMSpec(tool_call_parser="llama3_json"),
     # 3B: batch più alto e checkpoint più frequenti.

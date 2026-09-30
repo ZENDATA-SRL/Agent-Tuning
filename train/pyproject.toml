@@ -17,7 +17,6 @@ dependencies = [
     "torch>=2.12.1",
     "tqdm>=4.70.1",
     "transformers>=5.5.0",
-    "trl==0.24.0",
     "unsloth==2026.9.7",
     "unsloth-zoo==2026.9.6",
     "wandb>=0.30.0",
@@ -25,3 +24,4 @@ dependencies = [
 
 [tool.uv]
 package = false
+

@@ -19,10 +19,10 @@ from datasets import Dataset  # noqa: E402
 
 from shared.config import SFTConfig, partition_trainer_kwargs  # noqa: E402
 from train.data import (  # noqa: E402
-    filter_tool_call_traces,
     format_dataset,
     limit_traces,
     load_prepared_splits,
+    mix_tool_trace_fraction,
 )
 from train.oom import OOMTolerantSFTTrainer, ensure_batches_fit  # noqa: E402
 from train.utils import assert_masking_ok  # noqa: E402
@@ -89,18 +89,28 @@ def run_sft(config: SFTConfig) -> None:
     eval_dataset = (
         Dataset.from_list(splits["eval"]) if splits["eval"] else None
     )
-    if config.train_on_tool_calls_only:
+    if config.tool_trace_fraction is not None:
         before = len(train_dataset)
-        train_dataset = filter_tool_call_traces(train_dataset)
+        train_dataset = mix_tool_trace_fraction(
+            train_dataset,
+            config.tool_trace_fraction,
+            seed=config.seed,
+        )
         print(
-            "[sft] train_on_tool_calls_only: "
+            "[sft] tool_trace_fraction="
+            f"{config.tool_trace_fraction:g}: "
             f"train={len(train_dataset)}/{before}"
         )
         if eval_dataset is not None:
             before_eval = len(eval_dataset)
-            eval_dataset = filter_tool_call_traces(eval_dataset)
+            eval_dataset = mix_tool_trace_fraction(
+                eval_dataset,
+                config.tool_trace_fraction,
+                seed=config.seed,
+            )
             print(
-                "[sft] train_on_tool_calls_only: "
+                "[sft] tool_trace_fraction="
+                f"{config.tool_trace_fraction:g}: "
                 f"eval={len(eval_dataset)}/{before_eval}"
             )
     if config.shuffle:

@@ -60,14 +60,14 @@ Keep the environments separate. Their PyTorch and inference dependencies are not
 
 ## Fine-tuning
 
-Model recipes live in `shared/configs/` (train hyperparams plus vLLM serving knobs such as `tool_call_parser`). Configure the run by editing constants at the top of the script (model id, dataset, output dir, …), then launch it — no CLI flags:
+Model recipes live in `shared/configs/` (train hyperparams, chat/tool-call markup for GRPO rewards, and vLLM serving knobs such as `tool_call_parser`). Configure the run by editing constants at the top of the script (model id, dataset, output dir, …), then launch it — no CLI flags:
 
 ```bash
 # Edit MODEL_ID / DATASET_PATH / … in scripts/train_sft.py, then:
 uv run --project train python scripts/train_sft.py
 
-# Same pattern for GRPO:
-uv run --project train python scripts/train_qwen3_grpo.py
+# Same pattern for GRPO (edit MODEL_ID in scripts/train_grpo.py):
+uv run --project train python scripts/train_grpo.py
 ```
 
 Each recipe creates a unique output directory and saves a LoRA adapter:
@@ -75,7 +75,7 @@ Each recipe creates a unique output directory and saves a LoRA adapter:
 - SFT: `outputs/.../best_eval_model`
 - GRPO: `outputs/.../best_model`
 
-SFT masks the loss to assistant responses. GRPO accepts one or more reward functions; the example uses tool-call format, tool-name matching, and non-empty completion rewards. An SFT adapter can be passed to GRPO through `lora_adapter_path`.
+SFT masks the loss to assistant responses. GRPO accepts one or more reward functions; the example uses tool-call format, tool-name matching, argument exact match, and non-empty completion rewards. An SFT adapter can be passed to GRPO through `lora_adapter_path`.
 
 For remote training, configure the `SSH_REMOTE_*` variables in `.env`. The training wrapper syncs the project and dataset over SSH, streams logs, and can fetch the resulting adapter. The remote host must have a compatible Python environment and CUDA stack.
 

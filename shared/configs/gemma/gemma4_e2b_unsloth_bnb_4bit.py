@@ -6,6 +6,7 @@ from pathlib import Path
 
 from shared.config import (
     ChatTemplateSpec,
+    DecodingSetup,
     GenerationSpec,
     GRPOHyperparams,
     LoRASpec,
@@ -13,6 +14,7 @@ from shared.config import (
     SFTHyperparams,
     VLLMSpec,
 )
+from shared.configs.gemma.tool_calls import GEMMA4_TOOL_CALLS
 
 
 def gemma4_bnb_hf_overrides(model_id: str) -> dict:
@@ -67,13 +69,21 @@ RECIPE = ModelRecipe(
             "down_proj",
         ),
     ),
-    generation=GenerationSpec(
-        do_sample=True,
-        temperature=1.0,
-        top_p=0.95,
-        top_k=64,
-        min_p=0.0,
-    ),
+    decoding={
+        "no_thinking": DecodingSetup(
+            generation=GenerationSpec(
+                do_sample=True,
+                temperature=1.0,
+                top_p=0.95,
+                top_k=64,
+                min_p=0.0,
+            ),
+            # Con enable_thinking=False non c'è un canale di thinking vuoto da chiudere,
+            # a differenza di Qwen3.
+            generation_prompt_suffix="<|turn>model\n",
+            template_kwargs={"enable_thinking": False},
+        ),
+    },
     chat=ChatTemplateSpec(
         # Il template emette "<|turn>" + role + "\n", con role "user" o "system".
         instruction_part="<|turn>user\n",
@@ -87,11 +97,8 @@ RECIPE = ModelRecipe(
             # quindi se compare nella loss vuol dire che l'output del tool è entrato.
             "<tool_response|>",
         ),
-        # Con enable_thinking=False non c'è nessun canale di thinking vuoto da chiudere,
-        # a differenza di Qwen3.
-        generation_prompt_suffix="<|turn>model\n",
         support_multi_tool_calls=True,
-        template_kwargs={"enable_thinking": False},
+        tool_calls=GEMMA4_TOOL_CALLS,
     ),
     vllm=VLLMSpec(
         tool_call_parser="gemma4",
@@ -116,7 +123,7 @@ RECIPE = ModelRecipe(
         gradient_checkpointing="unsloth",
         loss_masking="unsloth_responses_only",
         last_response_only=True,
-        train_on_tool_calls_only=False,
+        tool_trace_fraction=None,
     ),
     # Punti di partenza per GRPO su LoRA 4-bit, non un run già tarato.
     # Learning rate più basso dell'SFT: il vantaggio policy è rumoroso.
@@ -126,7 +133,7 @@ RECIPE = ModelRecipe(
         per_device_train_batch_size=1,
         gradient_accumulation_steps=4,
         num_generations=4,
-        max_completion_length=16384,
+        max_completion_length=1024,
         beta=0.04,
         warmup_ratio=0.03,
         weight_decay=0.01,
@@ -138,5 +145,6 @@ RECIPE = ModelRecipe(
         save_steps=40,
         mixed_precision="bf16",
         gradient_checkpointing="unsloth",
+        tool_trace_fraction=None,
     ),
 )

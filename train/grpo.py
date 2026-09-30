@@ -14,7 +14,12 @@ configure_env()
 from datasets import Dataset  # noqa: E402
 
 from shared.config import GRPOConfig, partition_trainer_kwargs  # noqa: E402
-from train.data import format_grpo_dataset, limit_traces, load_prepared_splits  # noqa: E402
+from train.data import (  # noqa: E402
+    format_grpo_dataset,
+    limit_traces,
+    load_prepared_splits,
+    mix_tool_trace_fraction,
+)
 
 RewardFunc = Callable[..., list[float | None]]
 
@@ -86,6 +91,12 @@ def run_grpo(
     """Run GRPO and persist the LoRA adapter to `config.output_dir`."""
     configure_env()
 
+    # Unsloth coerces TRL's package-availability flags from tuples to bools.
+    # Transformers >= 5 returns (exists, version); a non-empty tuple is always
+    # truthy, so GRPOTrainer imports optional packages that are not installed
+    # (mergekit, vllm_ascend) and crashes. The patch has to run first.
+    import unsloth  # type: ignore  # noqa: F401
+
     from trl import GRPOConfig as TRLGRPOConfig  # type: ignore
     from trl import GRPOTrainer  # type: ignore
 
@@ -130,6 +141,33 @@ def run_grpo(
     )
 
     train_dataset = Dataset.from_list(splits["train"])
+    eval_dataset = (
+        Dataset.from_list(splits["eval"]) if splits["eval"] else None
+    )
+    if config.tool_trace_fraction is not None:
+        before = len(train_dataset)
+        train_dataset = mix_tool_trace_fraction(
+            train_dataset,
+            config.tool_trace_fraction,
+            seed=config.seed,
+        )
+        print(
+            "[grpo] tool_trace_fraction="
+            f"{config.tool_trace_fraction:g}: "
+            f"train={len(train_dataset)}/{before}"
+        )
+        if eval_dataset is not None:
+            before_eval = len(eval_dataset)
+            eval_dataset = mix_tool_trace_fraction(
+                eval_dataset,
+                config.tool_trace_fraction,
+                seed=config.seed,
+            )
+            print(
+                "[grpo] tool_trace_fraction="
+                f"{config.tool_trace_fraction:g}: "
+                f"eval={len(eval_dataset)}/{before_eval}"
+            )
     if config.shuffle:
         print(f"[grpo] Shuffling train dataset (seed={config.seed})")
         train_dataset = train_dataset.shuffle(seed=config.seed)
@@ -137,10 +175,6 @@ def run_grpo(
         before = len(train_dataset)
         train_dataset = limit_traces(train_dataset, config.max_traces)
         print(f"[grpo] Train traces: {len(train_dataset)}/{before}")
-
-    eval_dataset = (
-        Dataset.from_list(splits["eval"]) if splits["eval"] else None
-    )
 
     print("[grpo] Rendering GRPO prompts with chat template")
     train_dataset = format_grpo_dataset(

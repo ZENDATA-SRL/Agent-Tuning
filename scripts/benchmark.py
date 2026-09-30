@@ -34,6 +34,9 @@ DATASET_PATH = "data/umore/f818d980-45c4-4adc-9140-b491c7d6aa56/test.jsonl"
 LORA_PATH: str | None = "outputs/sft-qwen3-8b-umore-july/checkpoint-320"
 LORA_NAME: str | None = "qwen-umore"
 
+# "thinking" or "no_thinking". The recipe must define that key.
+DECODING_MODE = "no_thinking"
+
 # Optional smoke-test cap. None = full dataset.
 MAX_TRACES: int | None = None
 
@@ -48,6 +51,7 @@ def main() -> None:
         lora_name=LORA_NAME,
         lora_path=LORA_PATH,
         max_traces=MAX_TRACES,
+        decoding_mode=DECODING_MODE,
     )
 
 
