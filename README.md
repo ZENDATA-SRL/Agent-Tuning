@@ -63,7 +63,7 @@ Keep the environments separate. Their PyTorch and inference dependencies are not
 Model recipes live in `shared/configs/` (train hyperparams, chat/tool-call markup for GRPO rewards, and vLLM serving knobs such as `tool_call_parser`). Configure the run by editing constants at the top of the script (model id, dataset, output dir, …), then launch it — no CLI flags:
 
 ```bash
-# Edit MODEL_ID / DATASET_PATH / … in scripts/train_sft.py, then:
+# Edit MODEL_ID / DATASETS / … in scripts/train_sft.py, then:
 uv run --project train python scripts/train_sft.py
 
 # Same pattern for GRPO (edit MODEL_ID in scripts/train_grpo.py):

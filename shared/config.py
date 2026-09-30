@@ -8,7 +8,7 @@ from __future__ import annotations
 import inspect
 import uuid
 from dataclasses import asdict, dataclass, field, replace
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 
 
@@ -32,6 +32,16 @@ def _resolve_run(output_dir: str, run_id: str | None) -> tuple[str, str]:
     rid = run_id or str(uuid.uuid4())
     base = output_dir.rstrip("/")
     return rid, f"{base}-{rid}"
+
+
+def _normalize_datasets(
+    datasets: Sequence[tuple[str, float]],
+) -> tuple[tuple[str, float], ...]:
+    """Freeze ``(path, fraction)`` pairs. Each fraction is of that file."""
+    rows = tuple((str(path), float(fraction)) for path, fraction in datasets)
+    if not rows:
+        raise ValueError("datasets non può essere vuoto.")
+    return rows
 
 
 LossMasking = Literal["unsloth_responses_only", "assistant_turns"]
@@ -305,12 +315,11 @@ class ModelRecipe:
     def sft(
         self,
         *,
-        dataset_path: str,
+        datasets: Sequence[tuple[str, float]],
         output_dir: str,
         resume_from_checkpoint: str | None = None,
         shuffle: bool = False,
         max_traces: int | None = None,
-        dataset_fraction: float = 1.0,
         tool_trace_fraction: float | None | Any = _UNSET,
         decoding_mode: DecodingMode = "no_thinking",
         run_id: str | None = None,
@@ -332,12 +341,11 @@ class ModelRecipe:
         setup = self.decoding_setup(decoding_mode)
         spec = self.resolve_generation("sft", decoding_mode)
         params: dict[str, Any] = dict(
-            dataset_path=dataset_path,
+            datasets=_normalize_datasets(datasets),
             output_dir=output_dir,
             resume_from_checkpoint=resume_from_checkpoint,
             shuffle=shuffle,
             max_traces=max_traces,
-            dataset_fraction=dataset_fraction,
             tool_trace_fraction=fraction,
             temp_id=run_id,
             model_name=self.model_name,
@@ -377,13 +385,12 @@ class ModelRecipe:
     def grpo(
         self,
         *,
-        dataset_path: str,
+        datasets: Sequence[tuple[str, float]],
         output_dir: str,
         resume_from_checkpoint: str | None = None,
         lora_adapter_path: str | None = None,
         shuffle: bool = False,
         max_traces: int | None = None,
-        dataset_fraction: float = 1.0,
         tool_trace_fraction: float | None | Any = _UNSET,
         reward_weights: list[float] | None = None,
         decoding_mode: DecodingMode = "no_thinking",
@@ -409,13 +416,12 @@ class ModelRecipe:
         setup = self.decoding_setup(decoding_mode)
         spec = self.resolve_generation("grpo", decoding_mode)
         params: dict[str, Any] = dict(
-            dataset_path=dataset_path,
+            datasets=_normalize_datasets(datasets),
             output_dir=output_dir,
             resume_from_checkpoint=resume_from_checkpoint,
             lora_adapter_path=lora_adapter_path,
             shuffle=shuffle,
             max_traces=max_traces,
-            dataset_fraction=dataset_fraction,
             tool_trace_fraction=fraction,
             reward_weights=reward_weights,
             temp_id=run_id,
@@ -458,29 +464,27 @@ class ModelRecipe:
         method: Literal["sft", "grpo"],
         *,
         output_dir: str,
-        dataset_path: str | None = None,
+        datasets: Sequence[tuple[str, float]] | None = None,
         resume_from_checkpoint: str | None = None,
         shuffle: bool = False,
         max_traces: int | None = None,
-        dataset_fraction: float = 1.0,
         tool_trace_fraction: float | None | Any = _UNSET,
         decoding_mode: DecodingMode = "no_thinking",
         temp_id: str | None = None,
         **overrides: Any,
     ) -> SFTConfig | GRPOConfig:
-        if dataset_path is None:
-            raise TypeError(f"build(method={method!r}) richiede dataset_path.")
+        if datasets is None:
+            raise TypeError(f"build(method={method!r}) richiede datasets.")
         fraction_kw: dict[str, Any] = {}
         if tool_trace_fraction is not _UNSET:
             fraction_kw["tool_trace_fraction"] = tool_trace_fraction
         if method == "sft":
             return self.sft(
-                dataset_path=dataset_path,
+                datasets=datasets,
                 output_dir=output_dir,
                 resume_from_checkpoint=resume_from_checkpoint,
                 shuffle=shuffle,
                 max_traces=max_traces,
-                dataset_fraction=dataset_fraction,
                 decoding_mode=decoding_mode,
                 run_id=temp_id,
                 **fraction_kw,
@@ -488,12 +492,11 @@ class ModelRecipe:
             )
         if method == "grpo":
             return self.grpo(
-                dataset_path=dataset_path,
+                datasets=datasets,
                 output_dir=output_dir,
                 resume_from_checkpoint=resume_from_checkpoint,
                 shuffle=shuffle,
                 max_traces=max_traces,
-                dataset_fraction=dataset_fraction,
                 decoding_mode=decoding_mode,
                 run_id=temp_id,
                 **fraction_kw,
@@ -565,19 +568,17 @@ def partition_trainer_kwargs(
 class SFTConfig:
     """Resolved supervised fine-tuning run. Built by `ModelRecipe.sft`."""
 
-    # I/O. Train / test / eval are cut from this single file.
-    dataset_path: str
+    # I/O. Each pair is (path, fraction of that file) before the 10/10/80 split.
+    datasets: tuple[tuple[str, float], ...]
     output_dir: str
     resume_from_checkpoint: str | None
     # Shuffle the train split before formatting / training.
     shuffle: bool
     # Cap the train split after shuffle. None loads every trace.
     max_traces: int | None
-    # Fraction of records in dataset_path used before train/eval/test split (1.0 = all).
-    dataset_fraction: float
     # Target share of tool-ending traces in [0.0, 1.0], or None for natural mix.
     tool_trace_fraction: float | None
-    # Folder name, next to dataset_path, for the train/test/eval JSONL files.
+    # Folder name under data/merged for the train/test/eval JSONL files.
     temp_id: str | None
 
     # Model
@@ -637,8 +638,8 @@ class GRPOConfig:
     Optional `reward_weights` must match the number of reward functions.
     """
 
-    # Train / test / eval are cut from this single file.
-    dataset_path: str
+    # Each pair is (path, fraction of that file) before the 10/10/80 split.
+    datasets: tuple[tuple[str, float], ...]
     output_dir: str
     resume_from_checkpoint: str | None
     # Directory with adapter_config.json (e.g. SFT best_eval_model). None = fresh LoRA.
@@ -646,10 +647,9 @@ class GRPOConfig:
     shuffle: bool
     # Cap the train split after shuffle. None loads every trace.
     max_traces: int | None
-    dataset_fraction: float
     # Target share of tool-ending traces in [0.0, 1.0], or None for natural mix.
     tool_trace_fraction: float | None
-    # Folder name, next to dataset_path, for the train/test/eval JSONL files.
+    # Folder name under data/merged for the train/test/eval JSONL files.
     temp_id: str | None
     reward_weights: list[float] | None
 

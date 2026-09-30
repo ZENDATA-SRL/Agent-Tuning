@@ -30,11 +30,14 @@ from train import run_sft  # noqa: E402
 #   "unsloth/Llama-3.2-3B-Instruct-unsloth-bnb-4bit"
 MODEL_ID = "unsloth/Qwen3-8B-unsloth-bnb-4bit"
 
-DATASET_PATH = "data/apigenmt5k/dataset.json"
-OUTPUT_DIR = "outputs/sft-qwen3-8b-apigenmt5k"
+# (path, fraction of that file). Fractions are independent.
+DATASETS = (
+    ("data/apigenmt5k/dataset.json", 0.20),
+    ("data/umore/umore_july.json", 0.60),
+)
+OUTPUT_DIR = "outputs/sft-qwen3-8b-apigenmt5k-umore"
 
 SHUFFLE = True
-DATASET_FRACTION = 0.50  # 1.0 = full file
 # MAX_TRACES = None  # optional hard cap after shuffle
 # Share of traces ending in a tool call: 0.0 / 1.0 / in-between, or None = natural mix.
 TOOL_TRACE_FRACTION: float | None = None
@@ -52,13 +55,13 @@ def main() -> None:
     load_dotenv()
     recipe = load_model(MODEL_ID)
     config = recipe.sft(
-        dataset_path=DATASET_PATH,
+        datasets=DATASETS,
         output_dir=OUTPUT_DIR,
         shuffle=SHUFFLE,
-        dataset_fraction=DATASET_FRACTION,
         tool_trace_fraction=TOOL_TRACE_FRACTION,
         decoding_mode=DECODING_MODE,
         resume_from_checkpoint=RESUME_FROM_CHECKPOINT,
+        per_device_train_batch_size=4
         # Override recipe defaults for this run if needed:
         # lora_dropout=0.05,
         # learning_rate=1e-4,

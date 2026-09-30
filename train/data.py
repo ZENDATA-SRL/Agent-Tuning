@@ -5,17 +5,21 @@ import json
 import random
 import uuid
 from pathlib import Path
-from typing import Any, Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from datasets import Dataset, load_dataset
 
 from train.templates import render_chat, split_parallel_tool_calls
 
-# Hold out test and eval from a single JSON file. The caller only passes
-# `dataset_path`; the split happens here, before any per-turn expansion.
+# Hold out test and eval per source file, then merge. The split happens
+# here, before any per-turn expansion. Combined JSONL lands in data/merged.
 _TEST_RATIO = 0.1
 _EVAL_RATIO = 0.1
 _SPLIT_SEED = 42
+_MERGED_ROOT = Path(__file__).resolve().parent.parent / "data" / "merged"
+# Provenance for the post-filter log. Stripped again before JSONL export.
+_SOURCE_KEY = "_dataset_source"
 
 
 def load_json_dataset(path: str) -> Dataset:
@@ -71,15 +75,16 @@ def _without_nulls(value: Any) -> Any:
 
 def _record_for_export(row: dict) -> dict:
     """Copy a record for JSONL export without schema-alignment nulls."""
-    return _without_nulls(row)
+    exported = _without_nulls(row)
+    exported.pop(_SOURCE_KEY, None)
+    return exported
 
 
 def write_split_jsonl(
-    dataset_path: str,
     splits: Mapping[str, list[dict]],
     temp_id: str,
 ) -> Path:
-    """Write one JSONL per split under `<dataset_dir>/<temp_id>/`."""
+    """Write one JSONL per split under ``data/merged/<temp_id>/``."""
     if (
         not temp_id
         or temp_id in {".", ".."}
@@ -87,7 +92,7 @@ def write_split_jsonl(
         or "\\" in temp_id
     ):
         raise ValueError(f"temp_id non valido: {temp_id!r}")
-    out_dir = Path(dataset_path).parent / temp_id
+    out_dir = _MERGED_ROOT / temp_id
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in ("train", "test", "eval"):
         path = out_dir / f"{name}.jsonl"
@@ -133,30 +138,48 @@ def _maybe_split_parallel_tool_calls(
 
 
 def load_prepared_splits(
-    path: str,
+    sources: Sequence[tuple[str, float]],
     *,
-    dataset_fraction: float = 1.0,
     temp_id: str | None = None,
     support_multi_tool_calls: bool = True,
 ) -> dict[str, list[dict]]:
-    """Split one dataset file, then cut traces so each ends on an assistant turn.
+    """Split each source file, merge, then cut traces so each ends on an assistant turn.
 
-    The conversation-level split is written next to `path` as
-    `<temp_id>/{train,test,eval}.jsonl` before per-turn expansion.
+    Each pair is ``(path, fraction of that file)``. Fractions are independent.
+    Conversation-level splits are shuffled together and written once as
+    ``data/merged/<temp_id>/{train,test,eval}.jsonl`` before per-turn expansion.
 
     When ``support_multi_tool_calls`` is False, parallel tool_calls are split
     into sequential single-call turns before the JSONL write and before the
     per-assistant-turn expansion, so each call becomes its own training piece.
+
+    Args:
+        sources: Dataset paths and the fraction of each file to keep.
+        temp_id: Subfolder of ``data/merged``. A uuid is used when omitted.
+        support_multi_tool_calls: When False, expand parallel tool calls first.
+
+    Returns:
+        Train, test, and eval traces. Each row keeps ``_dataset_source``.
     """
-    rows = [
-        _maybe_split_parallel_tool_calls(
-            dict(row),
-            support_multi_tool_calls=support_multi_tool_calls,
-        )
-        for row in load_json_dataset(path)
-    ]
-    splits = split_records(rows, dataset_fraction=dataset_fraction)
-    split_dir = write_split_jsonl(path, splits, temp_id or str(uuid.uuid4()))
+    if not sources:
+        raise ValueError("datasets non può essere vuoto.")
+    merged: dict[str, list[dict]] = {"eval": [], "test": [], "train": []}
+    for path, fraction in sources:
+        rows = [
+            _maybe_split_parallel_tool_calls(
+                dict(row),
+                support_multi_tool_calls=support_multi_tool_calls,
+            )
+            for row in load_json_dataset(path)
+        ]
+        for row in rows:
+            row[_SOURCE_KEY] = path
+        parts = split_records(rows, dataset_fraction=fraction)
+        for name in merged:
+            merged[name].extend(parts[name])
+    for name in merged:
+        random.Random(_SPLIT_SEED).shuffle(merged[name])
+    split_dir = write_split_jsonl(merged, temp_id or str(uuid.uuid4()))
     print(f"Wrote split files to {split_dir}")
     return {
         name: [
@@ -164,8 +187,85 @@ def load_prepared_splits(
             for row in split
             for piece in _traces_ending_with_assistant(row)
         ]
-        for name, split in splits.items()
+        for name, split in merged.items()
     }
+
+
+def _format_tool_text(cells: Mapping[str, Mapping[str, int]]) -> str:
+    """Render tool/text counts for train, eval, and test on one line."""
+    return "\n" + "  ".join(
+        f"{cells[split]['tool']:7d} {cells[split]['text']:7d}"
+        for split in ("train", "eval", "test")
+    ) + "\n"
+
+
+def log_source_counts(
+    prefix: str,
+    sources: Sequence[str],
+    *,
+    train: Dataset,
+    eval_dataset: Dataset | None,
+    test: Sequence[Mapping[str, Any]],
+) -> None:
+    """Print how many post-filter traces from each source land in each split.
+
+    Counts are assistant-turn traces after ``tool_trace_fraction`` and
+    ``max_traces``. ``tool`` is a turn whose last message has tool calls;
+    ``text`` is a normal assistant message. The JSONL export is still one
+    row per conversation, so its line counts differ from this table. Test
+    is not passed through those two filters.
+
+    Args:
+        prefix: Log tag, ``sft`` or ``grpo``.
+        sources: Dataset paths, in the order they should appear.
+        train: Train split after filters.
+        eval_dataset: Eval split after filters, if any.
+        test: Test traces. Tool-mix and ``max_traces`` do not apply.
+    """
+    splits = ("train", "eval", "test")
+    order: list[str] = []
+    seen: set[str] = set()
+    for src in sources:
+        if src not in seen:
+            order.append(src)
+            seen.add(src)
+    empty = {split: {"tool": 0, "text": 0} for split in splits}
+    counts: dict[str, dict[str, dict[str, int]]] = {
+        src: {split: dict(cells) for split, cells in empty.items()}
+        for src in order
+    }
+
+    def _add(split: str, rows: Dataset | Sequence[Mapping[str, Any]]) -> None:
+        for row in rows:
+            src = str(row[_SOURCE_KEY])
+            if src not in counts:
+                counts[src] = {name: {"tool": 0, "text": 0} for name in splits}
+                order.append(src)
+            kind = "tool" if _ends_with_tool_call(dict(row)) else "text"
+            counts[src][split][kind] += 1
+
+    _add("train", train)
+    if eval_dataset is not None:
+        _add("eval", eval_dataset)
+    _add("test", test)
+
+    label = "dataset"
+    width = max(len(label), *(len(src) for src in order))
+    pair = f"{'tool':>7} {'text':>7}"
+    print(f"[{prefix}] traces after filters")
+    print(
+        f"{'':<{width}}  "
+        + "  ".join(f"{name:^{len(pair)}}" for name in splits)
+    )
+    print(f"{label:<{width}}  " + "  ".join(pair for _ in splits))
+    totals = {split: {"tool": 0, "text": 0} for split in splits}
+    for src in order:
+        row = counts[src]
+        print(f"{src:<{width}}  " + _format_tool_text(row))
+        for split in splits:
+            totals[split]["tool"] += row[split]["tool"]
+            totals[split]["text"] += row[split]["text"]
+    print(f"{'total':<{width}}  " + _format_tool_text(totals))
 
 
 def limit_traces(dataset: Dataset, max_traces: int | None) -> Dataset:

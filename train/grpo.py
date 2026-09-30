@@ -18,6 +18,7 @@ from train.data import (  # noqa: E402
     format_grpo_dataset,
     limit_traces,
     load_prepared_splits,
+    log_source_counts,
     mix_tool_trace_fraction,
 )
 
@@ -117,27 +118,18 @@ def run_grpo(
 
     model, tokenizer = _load_model_and_tokenizer(config)
 
-    print(f"[grpo] Loading dataset: {config.dataset_path}")
-    if config.dataset_fraction < 1.0:
-        print(
-            f"[grpo] Using {config.dataset_fraction:g} of records from file"
-        )
+    print("[grpo] Loading datasets:")
+    for path, fraction in config.datasets:
+        print(f"[grpo]   {path} ({fraction:g})")
     if not config.support_multi_tool_calls:
         print(
             "[grpo] support_multi_tool_calls=False: "
             "parallel tool_calls will be split into sequential turns"
         )
     splits = load_prepared_splits(
-        config.dataset_path,
-        dataset_fraction=config.dataset_fraction,
+        config.datasets,
         temp_id=config.temp_id,
         support_multi_tool_calls=config.support_multi_tool_calls,
-    )
-    print(
-        "[grpo] Split sizes: "
-        f"train={len(splits['train'])}, "
-        f"test={len(splits['test'])}, "
-        f"eval={len(splits['eval'])}"
     )
 
     train_dataset = Dataset.from_list(splits["train"])
@@ -175,6 +167,13 @@ def run_grpo(
         before = len(train_dataset)
         train_dataset = limit_traces(train_dataset, config.max_traces)
         print(f"[grpo] Train traces: {len(train_dataset)}/{before}")
+    log_source_counts(
+        "grpo",
+        [path for path, _ in config.datasets],
+        train=train_dataset,
+        eval_dataset=eval_dataset,
+        test=splits["test"],
+    )
 
     print("[grpo] Rendering GRPO prompts with chat template")
     train_dataset = format_grpo_dataset(

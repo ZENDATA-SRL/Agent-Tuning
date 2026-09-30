@@ -22,6 +22,7 @@ from train.data import (  # noqa: E402
     format_dataset,
     limit_traces,
     load_prepared_splits,
+    log_source_counts,
     mix_tool_trace_fraction,
 )
 from train.oom import OOMTolerantSFTTrainer, ensure_batches_fit  # noqa: E402
@@ -62,27 +63,18 @@ def run_sft(config: SFTConfig) -> None:
     # max_new_tokens explicitly, so remove the conflicting legacy default.
     model.generation_config.max_length = None
 
-    print(f"[sft] Loading dataset: {config.dataset_path}")
-    if config.dataset_fraction < 1.0:
-        print(
-            f"[sft] Using {config.dataset_fraction:g} of records from file"
-        )
+    print("[sft] Loading datasets:")
+    for path, fraction in config.datasets:
+        print(f"[sft]   {path} ({fraction:g})")
     if not config.support_multi_tool_calls:
         print(
             "[sft] support_multi_tool_calls=False: "
             "parallel tool_calls will be split into sequential turns"
         )
     splits = load_prepared_splits(
-        config.dataset_path,
-        dataset_fraction=config.dataset_fraction,
+        config.datasets,
         temp_id=config.temp_id,
         support_multi_tool_calls=config.support_multi_tool_calls,
-    )
-    print(
-        "[sft] Split sizes: "
-        f"train={len(splits['train'])}, "
-        f"test={len(splits['test'])}, "
-        f"eval={len(splits['eval'])}"
     )
 
     train_dataset = Dataset.from_list(splits["train"])
@@ -120,6 +112,13 @@ def run_sft(config: SFTConfig) -> None:
         before = len(train_dataset)
         train_dataset = limit_traces(train_dataset, config.max_traces)
         print(f"[sft] Train traces: {len(train_dataset)}/{before}")
+    log_source_counts(
+        "sft",
+        [path for path, _ in config.datasets],
+        train=train_dataset,
+        eval_dataset=eval_dataset,
+        test=splits["test"],
+    )
 
     print("[sft] Rendering dataset with chat template")
     train_dataset = format_dataset(
@@ -177,7 +176,7 @@ def run_sft(config: SFTConfig) -> None:
         padding_free=False,
         # TRL 1.13 sets use_reentrant=False on transformers 4.x, which skips
         # Unsloth's gradient offload.
-        # gradient_checkpointing_kwargs={"use_reentrant": True},
+        gradient_checkpointing_kwargs={"use_reentrant": True},
     )
     if has_eval:
         # Eval loss does not need logits. Leaving prediction_loss_only off

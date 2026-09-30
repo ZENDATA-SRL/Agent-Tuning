@@ -34,11 +34,13 @@ from train.rewards import resolve_reward_funcs  # noqa: E402
 #   "unsloth/Llama-3.2-3B-Instruct-unsloth-bnb-4bit"
 MODEL_ID = "unsloth/Qwen3-8B-unsloth-bnb-4bit"
 
-DATASET_PATH = "data/apigenmt5k/dataset.json"
+# (path, fraction of that file). Fractions are independent.
+DATASETS = (
+    ("data/apigenmt5k/dataset.json", 0.20),
+)
 OUTPUT_DIR = "outputs/grpo-qwen3-8b-umore"
 
 SHUFFLE = True
-DATASET_FRACTION = 0.20  # 1.0 = full file
 # MAX_TRACES = None  # optional hard cap after shuffle
 # Share of traces ending in a tool call: 0.0 / 1.0 / in-between, or None = natural mix.
 TOOL_TRACE_FRACTION: float | None = 0.75
@@ -72,11 +74,10 @@ def main() -> None:
     load_dotenv()
     recipe = load_model(MODEL_ID)
     config = recipe.grpo(
-        dataset_path=DATASET_PATH,
+        datasets=DATASETS,
         output_dir=OUTPUT_DIR,
         lora_adapter_path=LORA_ADAPTER_PATH,
         shuffle=SHUFFLE,
-        dataset_fraction=DATASET_FRACTION,
         tool_trace_fraction=TOOL_TRACE_FRACTION,
         reward_weights=list(REWARD_WEIGHTS),
         decoding_mode=DECODING_MODE,
