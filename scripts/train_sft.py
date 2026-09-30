@@ -32,18 +32,22 @@ MODEL_ID = "unsloth/Qwen3-8B-unsloth-bnb-4bit"
 
 # (path, fraction of that file). Fractions are independent.
 DATASETS = (
-    ("data/apigenmt5k/dataset.json", 0.20),
-    ("data/umore/umore_july.json", 0.60),
+    ("data/apigenmt5k/dataset.json", 0.12),
+    ("data/umore/umore_july.json", 1.00),
 )
 OUTPUT_DIR = "outputs/sft-qwen3-8b-apigenmt5k-umore"
 
 SHUFFLE = True
 # MAX_TRACES = None  # optional hard cap after shuffle
 # Share of traces ending in a tool call: 0.0 / 1.0 / in-between, or None = natural mix.
-TOOL_TRACE_FRACTION: float | None = None
+TOOL_TRACE_FRACTION: float | None = 0.6
 
 # "thinking" or "no_thinking". The recipe must define that key.
 DECODING_MODE = "no_thinking"
+
+# Share of the shortest train traces to keep when retrying the current batch
+# size, before that size is lowered again. 1.0 drops nothing. Range [0.0, 1.0].
+BATCH_KEEP_PERCENTILE = 0.85
 
 # Optional resume path, or None for a fresh run.
 RESUME_FROM_CHECKPOINT: str | None = None
@@ -61,7 +65,8 @@ def main() -> None:
         tool_trace_fraction=TOOL_TRACE_FRACTION,
         decoding_mode=DECODING_MODE,
         resume_from_checkpoint=RESUME_FROM_CHECKPOINT,
-        per_device_train_batch_size=4
+        batch_keep_percentile=BATCH_KEEP_PERCENTILE,
+        per_device_train_batch_size=4,
         # Override recipe defaults for this run if needed:
         # lora_dropout=0.05,
         # learning_rate=1e-4,

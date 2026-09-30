@@ -235,7 +235,10 @@ def run_sft(config: SFTConfig) -> None:
 
     # Probe the longest batches before the run. A later OOM skips that batch
     # instead of killing the process; see train/oom.py.
-    ensure_batches_fit(trainer)
+    ensure_batches_fit(
+        trainer,
+        batch_keep_percentile=config.batch_keep_percentile,
+    )
 
     if config.resume_from_checkpoint:
         print(

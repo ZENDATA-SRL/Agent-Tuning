@@ -5,6 +5,10 @@ the default sampler can place the longest rows together. Peak memory is
 therefore the longest batch, not the average one. Eval is checked separately
 because its forward materializes logits, which training with fused
 cross-entropy does not.
+
+`batch_keep_percentile` (train only) may drop the longest traces at the
+current batch size before that size is lowered again. Rows that do not fit
+even alone are still removed afterwards: those traces cannot be trained.
 """
 from __future__ import annotations
 
@@ -311,6 +315,38 @@ def _oom_limit_error(kind: str) -> RuntimeError:
     )
 
 
+def _validate_keep_percentile(percentile: float) -> None:
+    """Raise when `percentile` is outside [0.0, 1.0]."""
+    if isinstance(percentile, bool) or not isinstance(percentile, (int, float)):
+        raise ValueError(
+            "batch_keep_percentile deve essere un numero in [0.0, 1.0], "
+            f"ricevuto {percentile!r}."
+        )
+    if not 0.0 <= float(percentile) <= 1.0:
+        raise ValueError(
+            "batch_keep_percentile deve essere in [0.0, 1.0], "
+            f"ricevuto {percentile}."
+        )
+
+
+def _length_at_keep_percentile(lengths: list[int], percentile: float) -> int:
+    """Return the longest token count still inside the shortest `percentile`.
+
+    `percentile` is the share of shortest rows to keep, in [0.0, 1.0].
+    1.0 is the dataset maximum. 0.0 is the shortest row. The cutoff rank is
+    `ceil(percentile * n)`, so a row at that length is kept. Ties at the
+    cutoff stay too, and the kept share can be a little larger than requested.
+    """
+    order = sorted(lengths)
+    if percentile <= 0.0:
+        return order[0]
+    if percentile >= 1.0:
+        return order[-1]
+    rank = math.ceil(float(percentile) * len(order))
+    rank = min(max(rank, 1), len(order))
+    return order[rank - 1]
+
+
 def _candidate_batch_sizes(
     batch_size: int,
     count: int,
@@ -332,6 +368,58 @@ def _candidate_batch_sizes(
     return sizes
 
 
+def _probe_longest(
+    trainer: SFTTrainer,
+    dataset: Any,
+    lengths: list[int],
+    size: int,
+    *,
+    eval_mode: bool,
+    kind: str,
+) -> bool:
+    """Run one step on the `size` longest rows. Return whether it fits."""
+    indices = _longest_indices(lengths, size)
+    shown = _format_lengths(lengths, indices)
+    step = "forward" if eval_mode else "forward/backward"
+    print(
+        f"[sft] Memory check ({kind}): batch of {len(indices)}, "
+        f"lengths [{shown}], one {step}."
+    )
+    examples = [_row(dataset, index) for index in indices]
+    if _fits(trainer, examples, eval_mode=eval_mode):
+        print(f"[sft] Memory check passed ({kind}, batch size {len(indices)}).")
+        return True
+    print(f"[sft] {kind.capitalize()} batch does not fit.")
+    return False
+
+
+def _kept_by_percentile(
+    dataset: Any,
+    lengths: list[int],
+    percentile: float,
+    size: int,
+    kind: str,
+) -> tuple[Any, list[int], int, int] | None:
+    """Drop rows above `percentile` when that still fills a batch of `size`.
+
+    Returns None when the cut removes nothing or leaves fewer than `size`
+    rows. The caller then keeps the original dataset and tries a smaller
+    batch before cutting again.
+    """
+    limit = _length_at_keep_percentile(lengths, percentile)
+    capped, dropped = _filter_dataset(dataset, limit)
+    if dropped == 0:
+        return None
+    if len(capped) < size:
+        print(
+            f"[sft] batch_keep_percentile={percentile:g} leaves "
+            f"{len(capped)} {kind} examples, fewer than batch size {size}. "
+            "Keeping every example and reducing the batch size."
+        )
+        return None
+    return capped, _sequence_lengths(capped), dropped, limit
+
+
 def _fit_split(
     trainer: SFTTrainer,
     dataset: Any,
@@ -340,29 +428,64 @@ def _fit_split(
     eval_mode: bool,
     kind: str,
     effective: int | None = None,
+    keep_percentile: float = 1.0,
 ) -> tuple[Any, int]:
     """Return a dataset and batch size whose worst batch fits.
 
-    Tries the configured batch of the longest rows first. Smaller batches are
-    attempted next. Only when one full row still does not fit are longer rows
-    removed. An empty dataset means nothing of this split fits; the caller
-    decides whether that aborts the run.
+    For each candidate batch size, largest first, probes the longest rows of
+    the full dataset. When that fails and `keep_percentile` is below 1, drops
+    the longest traces up to that share and retries the same batch size. The
+    cut is kept only when the retry fits. Otherwise the next smaller batch is
+    tried on the original dataset, and the percentile cut is offered again
+    before the size drops further. Only when one full row still does not fit
+    are longer rows removed without the percentile cap. An empty dataset
+    means nothing of this split fits; the caller decides whether that aborts
+    the run.
     """
     lengths = _sequence_lengths(dataset)
-    step = "forward" if eval_mode else "forward/backward"
-    for size in _candidate_batch_sizes(batch_size, len(lengths), effective):
-        indices = _longest_indices(lengths, size)
-        shown = _format_lengths(lengths, indices)
-        print(
-            f"[sft] Memory check ({kind}): batch of {len(indices)}, "
-            f"lengths [{shown}], one {step}."
+    sizes = _candidate_batch_sizes(batch_size, len(lengths), effective)
+    for size in sizes:
+        if _probe_longest(
+            trainer, dataset, lengths, size, eval_mode=eval_mode, kind=kind
+        ):
+            return dataset, size
+        if keep_percentile >= 1.0:
+            continue
+        kept = _kept_by_percentile(
+            dataset, lengths, keep_percentile, size, kind
         )
-        examples = [_row(dataset, index) for index in indices]
-        if _fits(trainer, examples, eval_mode=eval_mode):
-            print(f"[sft] Memory check passed ({kind}, batch size {len(indices)}).")
-            return dataset, len(indices)
-
-        print(f"[sft] {kind.capitalize()} batch does not fit.")
+        if kept is None:
+            continue
+        capped, capped_lengths, dropped, limit = kept
+        print(
+            f"[sft] Trying batch size {size} after dropping examples above "
+            f"batch_keep_percentile={keep_percentile:g} "
+            f"({limit} tokens, {dropped} examples)."
+        )
+        if _probe_longest(
+            trainer,
+            capped,
+            capped_lengths,
+            size,
+            eval_mode=eval_mode,
+            kind=kind,
+        ):
+            print(
+                f"[sft] Dropping {dropped} {kind} examples longer than "
+                f"{limit} tokens (batch_keep_percentile={keep_percentile:g}) "
+                f"to keep batch size {size}."
+            )
+            return capped, size
+        smaller = (
+            "reducing the batch size."
+            if size > 1
+            else "dropping rows that do not fit even alone."
+        )
+        print(
+            f"[sft] Batch size {size} still does not fit after "
+            f"batch_keep_percentile={keep_percentile:g}. "
+            f"Keeping every example and {smaller}"
+        )
 
     longest = _row(dataset, _longest_indices(lengths, 1)[0])
     limit = _max_fitting_length(
@@ -396,7 +519,11 @@ def _clear_probe_metrics(trainer: SFTTrainer) -> None:
         trainer._total_train_tokens = 0
 
 
-def ensure_batches_fit(trainer: SFTTrainer) -> None:
+def ensure_batches_fit(
+    trainer: SFTTrainer,
+    *,
+    batch_keep_percentile: float = 1.0,
+) -> None:
     """Probe the longest batches and shrink the run until they fit.
 
     Call this after loss masking is installed and before `trainer.train`.
@@ -404,9 +531,17 @@ def ensure_batches_fit(trainer: SFTTrainer) -> None:
     A step that runs out of memory is discarded, the card is freed, and the
     next smaller batch is tried.
 
+    On the train split, `batch_keep_percentile` in [0.0, 1.0] is the share of
+    shortest traces that may be kept at the current batch size before that
+    size is lowered again. 1.0 drops nothing for that reason. Eval is
+    unchanged: its batch is already 1, so the same tradeoff does not apply.
+
     Args:
         trainer: SFT trainer whose datasets are already tokenized.
+        batch_keep_percentile: Shortest share of train rows to keep when
+            retrying the current train batch size before shrinking it.
     """
+    _validate_keep_percentile(batch_keep_percentile)
     effective = (
         trainer.args.per_device_train_batch_size
         * trainer.args.gradient_accumulation_steps
@@ -418,6 +553,7 @@ def ensure_batches_fit(trainer: SFTTrainer) -> None:
         eval_mode=False,
         kind="train",
         effective=effective,
+        keep_percentile=batch_keep_percentile,
     )
     if len(train_dataset) == 0:
         raise RuntimeError("Nessun esempio di train entra in memoria.")

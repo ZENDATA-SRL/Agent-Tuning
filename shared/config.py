@@ -323,6 +323,7 @@ class ModelRecipe:
         tool_trace_fraction: float | None | Any = _UNSET,
         decoding_mode: DecodingMode = "no_thinking",
         run_id: str | None = None,
+        batch_keep_percentile: float = 1.0,
         **overrides: Any,
     ) -> SFTConfig:
         """Build the flat config consumed by `run_sft`.
@@ -331,6 +332,10 @@ class ModelRecipe:
         that sampler as-is. `overrides` replace recipe defaults (learning
         rate, LoRA rank, …) for a single run. Names that are not fields of
         `SFTConfig` are stored in `trainer_kwargs` and forwarded to the trainer.
+
+        `batch_keep_percentile` is in [0.0, 1.0]. It is the share of shortest
+        train traces that may be kept when retrying the current batch size
+        before that size is lowered. 1.0 drops nothing for that reason.
         """
         run_id, output_dir = _resolve_run(output_dir, run_id)
         fraction = (
@@ -338,6 +343,18 @@ class ModelRecipe:
             if tool_trace_fraction is _UNSET
             else tool_trace_fraction
         )
+        if isinstance(batch_keep_percentile, bool) or not isinstance(
+            batch_keep_percentile, (int, float)
+        ):
+            raise ValueError(
+                "batch_keep_percentile deve essere un numero in [0.0, 1.0], "
+                f"ricevuto {batch_keep_percentile!r}."
+            )
+        if not 0.0 <= float(batch_keep_percentile) <= 1.0:
+            raise ValueError(
+                "batch_keep_percentile deve essere in [0.0, 1.0], "
+                f"ricevuto {batch_keep_percentile}."
+            )
         setup = self.decoding_setup(decoding_mode)
         spec = self.resolve_generation("sft", decoding_mode)
         params: dict[str, Any] = dict(
@@ -372,6 +389,7 @@ class ModelRecipe:
             gradient_checkpointing=self.sft_defaults.gradient_checkpointing,
             loss_masking=self.sft_defaults.loss_masking,
             last_response_only=self.sft_defaults.last_response_only,
+            batch_keep_percentile=float(batch_keep_percentile),
             **_sampling_fields(setup, spec),
             instruction_part=self.chat.instruction_part,
             response_part=self.chat.response_part,
@@ -610,6 +628,9 @@ class SFTConfig:
     gradient_checkpointing: str | bool
     loss_masking: LossMasking
     last_response_only: bool
+    # Share of shortest train traces kept before the batch size drops again.
+    # In [0.0, 1.0]. 1.0 drops nothing for this reason.
+    batch_keep_percentile: float
 
     # Sampling
     generation_do_sample: bool

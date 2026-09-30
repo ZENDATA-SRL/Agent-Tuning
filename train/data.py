@@ -191,12 +191,14 @@ def load_prepared_splits(
     }
 
 
-def _format_tool_text(cells: Mapping[str, Mapping[str, int]]) -> str:
-    """Render tool/text counts for train, eval, and test on one line."""
-    return "\n" + "  ".join(
-        f"{cells[split]['tool']:7d} {cells[split]['text']:7d}"
-        for split in ("train", "eval", "test")
-    ) + "\n"
+def _print_source_block(title: str, cells: Mapping[str, Mapping[str, int]]) -> None:
+    """Print one dataset as train/eval/test rows with tool, text, and total."""
+    print(title)
+    print(f"  {'':<5}  {'tool':>7}  {'text':>7}  {'total':>7}")
+    for split in ("train", "eval", "test"):
+        tool = cells[split]["tool"]
+        text = cells[split]["text"]
+        print(f"  {split:<5}  {tool:7d}  {text:7d}  {tool + text:7d}")
 
 
 def log_source_counts(
@@ -249,23 +251,17 @@ def log_source_counts(
         _add("eval", eval_dataset)
     _add("test", test)
 
-    label = "dataset"
-    width = max(len(label), *(len(src) for src in order))
-    pair = f"{'tool':>7} {'text':>7}"
     print(f"[{prefix}] traces after filters")
-    print(
-        f"{'':<{width}}  "
-        + "  ".join(f"{name:^{len(pair)}}" for name in splits)
-    )
-    print(f"{label:<{width}}  " + "  ".join(pair for _ in splits))
     totals = {split: {"tool": 0, "text": 0} for split in splits}
     for src in order:
         row = counts[src]
-        print(f"{src:<{width}}  " + _format_tool_text(row))
+        print()
+        _print_source_block(src, row)
         for split in splits:
             totals[split]["tool"] += row[split]["tool"]
             totals[split]["text"] += row[split]["text"]
-    print(f"{'total':<{width}}  " + _format_tool_text(totals))
+    print()
+    _print_source_block("total", totals)
 
 
 def limit_traces(dataset: Dataset, max_traces: int | None) -> Dataset:
